@@ -112,6 +112,7 @@ def summary_rows(report, metrics):
     else:
         rhythm_text = '未得到节奏统计'
     rows = [
+        ('程序版本', report.get('app_version', '旧报告未记录')),
         ('修音力度', f"{options.get('strength', 0) * 100:.0f}%"),
         ('平均音高修正量', _value(align.get('mean_abs_shift_cents'), ' 音分')),
         ('参考匹配置信度', _value(align.get('mean_confidence'), '', 2)),

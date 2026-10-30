@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import audio, config as C
+from . import __version__, audio, config as C
 from .align import estimate_shift, apply_shift
 from . import rhythm
 from .f0 import FcpeExtractor
@@ -130,7 +130,7 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
     dry_path, song_path = Path(dry_path), Path(song_path)
     out_path = Path(out_path) if out_path else C.OUT_DIR / f"{dry_path.stem}_autotuned.wav"
     work_dir = Path(work_dir) if work_dir else C.WORK_DIR / song_path.stem
-    report = {"dry": str(dry_path), "song": str(song_path), "options": asdict(opts)}
+    report = {"app_version": __version__, "dry": str(dry_path), "song": str(song_path), "options": asdict(opts)}
     if not 0 <= opts.strength <= 1:
         raise ValueError("修音强度必须在 0 到 1 之间")
     if not 0 <= opts.mix_space <= 2:

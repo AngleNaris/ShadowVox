@@ -1,5 +1,6 @@
 """真实 QtWebEngine 报告、试听定位、版本切换、保存/取消和离线 PNG 验收。"""
 import copy
+import hashlib
 import json
 import os
 import sys
@@ -13,12 +14,14 @@ from PySide6.QtCore import QSettings, QTimer, QUrl, Qt
 from PySide6.QtWidgets import QFileDialog, QApplication, QLineEdit
 from PySide6.QtTest import QTest
 from PySide6.QtGui import QImage
-from shadowvox import config as C
+from PySide6.QtWebEngineCore import QWebEngineDownloadRequest
+from shadowvox import __version__, config as C
 from shadowvox.preview import prepare
+from shadowvox.reporting import html_report, visual_payload
 from tools import test_gui as base
 
-OUT = ROOT/'out/report_implementation_20261029/gui'
-ACTUAL = OUT.parent
+OUT = Path(os.environ.get('SHADOWVOX_REPORT_TEST_OUT', ROOT/'out/releases'/__version__/'report_gui'))
+ACTUAL = ROOT/'out/report_implementation_20261029'
 
 
 def main():
@@ -27,8 +30,8 @@ def main():
     QSettings.setDefaultFormat(QSettings.Format.IniFormat)
     QSettings.setPath(QSettings.Format.IniFormat,QSettings.Scope.UserScope,str(C.DATA_ROOT))
     base.OUT = OUT
-    payload = json.loads((ACTUAL/'payload.json').read_text(encoding='utf-8'))
     saved = json.loads((ACTUAL/'青花瓷_报告验证.report.json').read_text(encoding='utf-8'))
+    payload = visual_payload(saved,saved['audio_analysis'],1,saved['output'])
     tracks,sr,_ = prepare(saved['comparison_before'],saved['output'])
     h = base.Harness(); w = h.window
     h.until('bridge !== null',20)
@@ -43,7 +46,8 @@ def main():
     h.js('versions = '+json.dumps([dict(n=i,name=p['name'],path=p['path']) for i,p in ((1,payload),(2,payload2))],ensure_ascii=False)+'; current=1; state.ready=true; renderVersions(); 1')
     h.js('renderReport('+json.dumps(payload,ensure_ascii=False)+', "reveal"); switchTab("report"); 1')
     h.wait(700)
-    checks = {'windows':{},'real_audio':True}
+    checks = {'windows':{},'real_audio':True,
+              'renderer_sha256':hashlib.sha256((ROOT/'src/shadowvox/ui/report.js').read_bytes()).hexdigest()}
     for width in (720,779,780,781,840,980,1080):
         w.resize(width,880); h.wait(400)
         h.js('document.querySelector(".content").scrollTop=0; 1')
@@ -132,19 +136,22 @@ def main():
     assert focus['outline'] == 'none' and 'inset' in focus['shadow'],focus
     checks['keyboard_focus'] = focus
     # 离线文件在同一真实浏览器中打开，实际下载 PNG。
-    offline = ACTUAL/'青花瓷_报告验证.report.html'
+    offline = OUT/'current-source.report.html'
+    offline.write_text(html_report(saved,saved['audio_analysis'],saved['output']),encoding='utf-8')
     w.view.load(QUrl.fromLocalFile(str(offline)))
     h.until('typeof ShadowReport !== "undefined" && document.querySelector("#report-poster svg") !== null',30)
     h.wait(350); h.shot('offline-report')
     download_path = OUT/'offline-share.png'; download_path.unlink(missing_ok=True)
+    downloads = []
     def download(request):
+        downloads.append(request)
         request.setDownloadDirectory(str(OUT)); request.setDownloadFileName(download_path.name); request.accept()
     w.view.page().profile().downloadRequested.connect(download)
     h.click('#export-png')
     end = base.time.monotonic()+40
-    while not download_path.exists() and base.time.monotonic()<end:
+    while (not downloads or not downloads[0].isFinished()) and base.time.monotonic()<end:
         h.wait(100)
-    h.wait(300)
+    assert downloads and downloads[0].state() == QWebEngineDownloadRequest.DownloadState.DownloadCompleted
     image = QImage(str(download_path))
     assert not image.isNull() and image.width() == 1080 and image.height() == 1440
     checks['offline_png'] = True

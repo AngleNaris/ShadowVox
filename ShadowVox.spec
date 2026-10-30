@@ -2,10 +2,24 @@ from pathlib import Path
 import shutil
 import sys
 import os
+import runpy
 import importlib.metadata as metadata
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, copy_metadata
+from PyInstaller.utils.win32.versioninfo import (
+    VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable, StringStruct, VarFileInfo, VarStruct)
 
 root=Path(SPECPATH)
+version=runpy.run_path(str(root/'src/shadowvox/__init__.py'))['__version__']
+filename=f'ShadowVox-{version}'
+version_info=VSVersionInfo(
+    ffi=FixedFileInfo(filevers=tuple(map(int,version.split('.')))+(0,),
+                      prodvers=tuple(map(int,version.split('.')))+(0,), fileType=1),
+    kids=[StringFileInfo([StringTable('080404B0',[
+        StringStruct('FileDescription','ShadowVox 修音工作台'),
+        StringStruct('ProductName','ShadowVox'),
+        StringStruct('FileVersion',version), StringStruct('ProductVersion',version),
+        StringStruct('OriginalFilename',filename+'.exe')])]),
+        VarFileInfo([VarStruct('Translation',[2052,1200])])])
 datas=[(str(root/'THIRD_PARTY.txt'),'licenses'),(str(root/'models/fcpe.onnx'),'models'),
        (str(root/'models/Kim_Vocal_2.onnx'),'models'),
        (str(root/'models/whisper-base.pt'),'models'),
@@ -58,6 +72,6 @@ a.binaries=[item for item in a.binaries if Path(item[0]).name.lower() not in
             ('icuuc.dll','icuin.dll','icudt.dll','ucrtbase.dll') and not
             Path(item[0]).name.lower().startswith(('api-ms-win-','ext-ms-win-'))]
 pyz=PYZ(a.pure)
-exe=EXE(pyz,a.scripts,a.binaries,a.datas,[],name='ShadowVox',debug=False,
+exe=EXE(pyz,a.scripts,a.binaries,a.datas,[],name=filename,version=version_info,debug=False,
         bootloader_ignore_signals=False,strip=False,upx=False,console=False,
         disable_windowed_traceback=False,icon=str(root/'assets/shadowvox.ico'))
