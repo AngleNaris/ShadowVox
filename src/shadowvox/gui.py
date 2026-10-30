@@ -22,7 +22,8 @@ from .gui_bridge import AUDIO_EXTS, Bridge
 
 UI_INDEX = Path(__file__).resolve().parent/'ui'/'index.html'
 BASE = '#fffafb'
-MIN_WINDOW, DEFAULT_WINDOW = (720, 600), (980, 740)
+MIN_WINDOW, DEFAULT_WINDOW = (720, 600), (900, 680)
+WINDOW_LAYOUT = 2
 
 
 class DropView(QWebEngineView):
@@ -88,7 +89,8 @@ class StudioWindow(QMainWindow):
         settings = QSettings('ShadowVox', 'ShadowVox')
         size, pos = settings.value('window/size'), settings.value('window/pos')
         screen = self.screen().availableGeometry()
-        if isinstance(size, QSize) and isinstance(pos, QPoint) and any(
+        current_layout = settings.value('window/layout', 0, type=int) == WINDOW_LAYOUT
+        if current_layout and isinstance(size, QSize) and isinstance(pos, QPoint) and any(
                 s.availableGeometry().contains(pos) for s in QApplication.screens()):
             self.resize(min(size.width(), screen.width()), min(size.height(), screen.height())); self.move(pos); return
         w, h = min(DEFAULT_WINDOW[0], screen.width()-32), min(DEFAULT_WINDOW[1], screen.height()-32)
@@ -101,6 +103,7 @@ class StudioWindow(QMainWindow):
             event.ignore(); return
         settings = QSettings('ShadowVox', 'ShadowVox')
         settings.setValue('window/size', self.size()); settings.setValue('window/pos', self.pos())
+        settings.setValue('window/layout', WINDOW_LAYOUT)
         self.bridge.shutdown(); event.accept()
 
 

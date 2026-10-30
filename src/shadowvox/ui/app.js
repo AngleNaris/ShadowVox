@@ -51,35 +51,44 @@ const PARAMS = {
   strength: { name: '音高', label: '音高修正', min: 0, max: 100, step: 1, def: 75, fmt: pct },
   rhythm_strength: { name: '节奏', label: '节奏强度', min: 0, max: 100, step: 5, def: 100, fmt: pct, power: 'rhythm' },
   denoise_strength: { name: '降噪', label: 'AI 降噪强度', min: 0, max: 100, step: 5, def: 100, fmt: pct, power: 'denoise' },
-  vocal_gain_db: { name: '人声', label: '人声音量', min: -6, max: 6, step: .5, def: 0, fmt: v => `${v > 0 ? '+' : ''}${v.toFixed(1)} dB` },
-  target_lufs: { name: '响度', label: '目标响度', min: -24, max: -12, step: 1, def: -16, fmt: v => `${v} LUFS`, mix: true },
-  true_peak_ceiling: { name: '峰值', label: '真峰值上限', min: -3, max: -1, step: .1, def: -1.5, fmt: v => `${v.toFixed(1)} dBTP`, mix: true },
+  vocal_gain_db: { name: '人声音量', label: '人声音量', min: -6, max: 6, step: .5, def: 0, fmt: v => `${v > 0 ? '+' : ''}${v.toFixed(1)} dB` },
+  target_lufs: { name: '成品目标响度', label: '整首成品目标综合响度（人声与伴奏）', min: -24, max: -12, step: 1, def: -16, fmt: v => `${v} LUFS`, mix: true },
+  true_peak_ceiling: { name: '成品峰值上限', label: '整首成品真峰值上限（人声与伴奏）', min: -3, max: -1, step: .1, def: -1.5, fmt: v => `${v.toFixed(1)} dBTP`, mix: true },
   mix_lowcut_hz: { name: '低切', label: '低切', min: 0, max: 150, step: 5, def: 75, fmt: v => (v ? `${v} Hz` : '关闭') },
   mix_eq: { name: '均衡', label: '均衡', min: 0, max: 200, step: 5, def: 100, fmt: pct },
   mix_compression: { name: '压缩', label: '压缩', min: 0, max: 200, step: 5, def: 100, fmt: pct },
   mix_deess: { name: '去齿', label: '去齿', min: 0, max: 200, step: 5, def: 100, fmt: pct },
   mix_reverb: { name: '混响', label: '混响', min: 0, max: 200, step: 5, def: 100, fmt: pct },
   mix_delay: { name: '延时', label: '延时', min: 0, max: 200, step: 5, def: 100, fmt: pct },
-  mix_duck: { name: '避让', label: '伴奏避让', min: 0, max: 200, step: 5, def: 100, fmt: pct },
+  mix_duck: { name: '伴奏避让', label: '伴奏避让', min: 0, max: 200, step: 5, def: 100, fmt: pct },
 };
-const SWITCHES = { rhythm: '节奏匹配', denoise: 'AI 降噪', declip: '削波修复', mix_effects: '混音效果' };
+const SWITCHES = { rhythm: '节奏匹配', denoise: 'AI 降噪', declip: '削波修复', mix_effects: '后期总开关' };
 const RACKS = [
-  { key: 'tune', title: '修音', cells: ['strength', 'rhythm_strength', 'denoise_strength', '@declip'] },
-  { key: 'level', title: '电平', cells: ['vocal_gain_db', 'target_lufs', 'true_peak_ceiling'] },
-  { key: 'mix', title: '混音', wide: true, bypass: 'mix_effects',
-    cells: ['mix_lowcut_hz', 'mix_eq', 'mix_compression', 'mix_deess', 'mix_reverb', 'mix_delay', 'mix_duck'] },
+  { key: 'cleanup', title: '干声清理', cells: ['@declip', 'denoise_strength'] },
+  { key: 'tune', title: '修音', cells: ['rhythm_strength', 'strength'] },
+  { key: 'level', title: '人声电平', cells: ['vocal_gain_db'] },
+  { key: 'tone', title: '音色与动态', post: true, bypass: 'mix_effects', groups: [
+    { title: 'EQ', cells: ['mix_lowcut_hz', 'mix_eq'] },
+    { title: '动态', cells: ['mix_compression', 'mix_deess'] }] },
+  { key: 'mix', title: '混音', post: true, groups: [
+    { title: '空间与伴奏', cells: ['mix_duck', 'mix_reverb', 'mix_delay'] }] },
+  { key: 'output', title: '成品输出', post: true, groups: [
+    { title: '人声 + 伴奏', cells: ['target_lufs', 'true_peak_ceiling'] }] },
 ];
 const HELP = {
-  tune: [['音高', '只跟随演唱的音高中心修正，保留大部分颤音与滑音；用 PSOLA 直接在原始波形上移调。严重的音高误检处可能有瑕疵。'],
-    ['节奏', '100% 为字句与声学联合的整句对齐；0% 关闭局部节奏修正，仍补偿整段偏移；中间值逐步缩小对齐调整。缺乏可靠证据的片段保持原速度，必要时成品会延长。点按名称可整体开关。'],
-    ['降噪', '在原始干声与 DeepFilterNet3 温和降噪（12 dB 衰减上限）之间混合，0% 旁路。伴奏串音和房间混响不保证完全去除。点按名称可整体开关。'],
-    ['削波', '只在检测到持续接近满幅的数字削波时做保守修复；归一化或有损编码后的削波可能漏检。']],
-  level: [['人声', '修音后人声相对伴奏的额外增益，±6 dB。'],
-    ['响度 / 峰值', '目标综合响度 −24 至 −12 LUFS，真峰值上限 −3 至 −1 dBTP。峰值保护可能使实际响度低于目标，以报告实测值为准。混音关闭时不可调。']],
-  mix: [['总述', '100% 对应已确认的默认效果，0% 旁路该项。关闭面板开关时只合并伴奏，不做人声效果与总线处理。'],
-    ['低切 / 均衡 / 压缩 / 去齿', '低切关闭或 5–150 Hz；减法与加法 EQ；3:1 压缩；EQ 后单次轻去齿，不重复去齿。'],
+  cleanup: [['削波修复', '先检查原始干声，只在检测到明显数字削波时保守修复；这个开关不会增加削波。归一化或有损编码后的削波可能漏检。'],
+    ['降噪', '削波检查后，再在原始干声与 DeepFilterNet3 温和降噪结果之间混合。0% 旁路降噪，100% 使用已确认的温和档；点按名称可开关。']],
+  tune: [['节奏', '先核对字句和声学证据，再修音高。100% 使用保守对齐上限；0% 或关闭时保持原始时间位置。不确定的片段保持原位原速，始终保留原始歌词顺序。'],
+    ['音高', '只跟随演唱的音高中心修正，保留大部分颤音与滑音；用 PSOLA 直接在原始波形上移调。严重的音高误检处可能有瑕疵。']],
+  level: [['人声音量', '修音后、进入音色和空间处理前的人声额外增益，范围 ±6 dB。只调整人声；整首歌的输出响度在最后的“成品输出”面板设定。']],
+  tone: [['EQ / 动态', '低切、均衡与压缩、去齿共同处理人声。现有均衡包含压缩前后的环节，因此在同一面板内分组，不改变既有处理顺序。100% 对应已确认的默认效果，0% 旁路该项。'],
+    ['后期总开关', '同时开关“音色与动态”“混音”和“成品输出”。关闭后只将人声与伴奏合并，不做这些后期效果；上方人声音量仍可调。']],
+  mix: [['伴奏避让', '处理后的人声触发伴奏让位，与人声空间效果汇合成混音。'],
     ['混响 / 延时', '开源 Freeverb 自然流行混响与独立短延时发送；不调用 VST3 效果。'],
-    ['避让', '由处理后人声触发伴奏让位。']],
+    ['开关', '受“音色与动态”标题右侧的后期总开关控制。']],
+  output: [['成品目标响度', '人声和伴奏混合后的整首歌目标综合响度，范围 −24 至 −12 LUFS；不单独调整人声。'],
+    ['成品峰值上限', '整首歌的真峰值上限，范围 −3 至 −1 dBTP。为保护峰值，实际综合响度可能低于目标；以报告中的实测值为准。'],
+    ['开关', '后期总开关关闭时，这两个成品输出设置不参与处理。']],
 };
 const AUDITION = '调整参数后，草稿会在后台重算当前播放位置附近的片段，属局部近似试听；要保存新设置，请再次生成成品。';
 
@@ -136,30 +145,40 @@ function buildRacks() {
   const root = $('#racks');
   RACKS.forEach((rack, i) => {
     const el = document.createElement('div');
-    el.className = 'rack rise' + (rack.wide ? ' rack-wide' : '');
+    el.className = `rack rack-${rack.key} rise` + (rack.post ? ' rack-post' : '');
     el.style.setProperty('--d', `${120 + i * 50}ms`); el.dataset.rack = rack.key;
     el.innerHTML = `<div class="rack-head"><span class="rack-index">0${i + 1}</span><h2 class="rack-title">${rack.title}</h2><span class="spacer"></span>
       <button class="key" type="button" data-help="${rack.key}" title="参数说明" aria-label="${rack.title} 参数说明" aria-haspopup="dialog"><svg class="i"><use href="#i-help"/></svg></button>
-      ${rack.bypass ? `<button class="key" type="button" role="switch" data-switch="${rack.bypass}" title="启用 / 旁路 ${SWITCHES[rack.bypass]}" aria-label="${SWITCHES[rack.bypass]}"><svg class="i"><use href="#i-power"/></svg></button>` : ''}
+      ${rack.bypass ? `<button class="key key-labeled" type="button" role="switch" data-switch="${rack.bypass}" title="开关全部后期：音色与动态、混音、成品输出" aria-label="${SWITCHES[rack.bypass]}" aria-controls="rack-tone-body rack-mix-body rack-output-body"><svg class="i"><use href="#i-power"/></svg><span>后期总开关</span></button>` : ''}
       </div><div class="rack-body"></div>`;
     const body = $('.rack-body', el);
-    for (const key of rack.cells) {
-      const cell = document.createElement('div'); cell.className = 'cell';
-      if (key.startsWith('@')) {
-        const k = key.slice(1); cell.dataset.key = k;
-        cell.innerHTML = `<button class="toggle-cell" type="button" role="switch" data-switch="${k}" aria-label="${SWITCHES[k]}" title="${SWITCHES[k]}：仅在检测到明显数字削波时修复"><svg class="i"><use href="#i-clip"/></svg></button>
-          <span class="cell-name">削波</span><output class="cell-value" data-switch-value="${k}"></output>`;
-      } else {
-        const d = PARAMS[key]; cell.dataset.key = key;
-        const name = d.power
-          ? `<button class="cell-name" type="button" role="switch" data-switch="${d.power}" aria-label="${SWITCHES[d.power]}" title="点按开关${SWITCHES[d.power]}"><svg class="i"><use href="#i-power"/></svg>${d.name}</button>`
-          : `<span class="cell-name">${d.name}</span>`;
-        cell.innerHTML = `<div class="knob-host" aria-label="${d.label}" title="${d.label}：上下拖动、滚轮或方向键，双击复位"></div>${name}<output class="cell-value"></output>`;
-        const out = $('output', cell);
-        knobs[key] = makeKnob($('.knob-host', cell), d, P[key], v => { P[key] = v; out.textContent = d.fmt(v); store.set('param_' + key, v); changed(); });
-        out.textContent = d.fmt(P[key]);
+    body.id = `rack-${rack.key}-body`;
+    if (rack.groups) body.classList.add('grouped-body');
+    for (const group of rack.groups || [{ cells: rack.cells }]) {
+      let host = body;
+      if (group.title) {
+        const section = document.createElement('section'); section.className = 'control-group';
+        section.innerHTML = `<h3 class="control-group-title">${group.title}</h3><div class="control-group-cells"></div>`;
+        body.appendChild(section); host = $('.control-group-cells', section);
       }
-      body.appendChild(cell);
+      for (const key of group.cells) {
+        const cell = document.createElement('div'); cell.className = 'cell';
+        if (key.startsWith('@')) {
+          const k = key.slice(1); cell.dataset.key = k;
+          cell.innerHTML = `<button class="toggle-cell" type="button" role="switch" data-switch="${k}" aria-label="${SWITCHES[k]}" title="${SWITCHES[k]}：仅在检测到明显数字削波时修复"><svg class="i"><use href="#i-clip"/></svg></button>
+            <span class="cell-name">${SWITCHES[k]}</span><output class="cell-value" data-switch-value="${k}"></output>`;
+        } else {
+          const d = PARAMS[key]; cell.dataset.key = key;
+          const name = d.power
+            ? `<button class="cell-name" type="button" role="switch" data-switch="${d.power}" aria-label="${SWITCHES[d.power]}" title="点按开关${SWITCHES[d.power]}"><svg class="i"><use href="#i-power"/></svg>${d.name}</button>`
+            : `<span class="cell-name">${d.name}</span>`;
+          cell.innerHTML = `<div class="knob-host" aria-label="${d.label}" title="${d.label}：上下拖动、滚轮或方向键，双击复位"></div>${name}<output class="cell-value"></output>`;
+          const out = $('output', cell);
+          knobs[key] = makeKnob($('.knob-host', cell), d, P[key], v => { P[key] = v; out.textContent = d.fmt(v); store.set('param_' + key, v); changed(); });
+          out.textContent = d.fmt(P[key]);
+        }
+        host.appendChild(cell);
+      }
     }
     root.appendChild(el);
   });
@@ -173,13 +192,14 @@ function buildRacks() {
 function paint() {
   $$('[data-switch]').forEach(b => b.setAttribute('aria-checked', String(SW[b.dataset.switch])));
   $$('[data-switch-value]').forEach(o => { o.textContent = SW[o.dataset.switchValue] ? '开' : '关'; });
-  const mixBody = $('[data-rack="mix"] .rack-body');
-  mixBody.classList.toggle('is-disabled', !SW.mix_effects); mixBody.inert = !SW.mix_effects;
+  $$('.rack-post .rack-body').forEach(body => {
+    body.classList.toggle('is-disabled', !SW.mix_effects); body.inert = !SW.mix_effects;
+  });
   for (const [key, d] of Object.entries(PARAMS)) {
     const cell = $(`.cell[data-key="${key}"]`), knob = $('.knob-wrap', cell);
     if (d.mix) {
-      cell.classList.toggle('is-disabled', !SW.mix_effects); cell.inert = !SW.mix_effects;
-      cell.title = SW.mix_effects ? '' : '开启混音后可用';
+      cell.inert = !SW.mix_effects;
+      cell.title = SW.mix_effects ? '' : '开启后期总开关后可用';
     }
     if (d.power) { cell.classList.toggle('off', !SW[d.power]); knob.inert = !SW[d.power]; }
   }

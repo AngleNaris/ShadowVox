@@ -8,19 +8,21 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src'))
 import os
 os.environ['SHADOWVOX_WINDOW'] = '980x740'
-from PySide6.QtCore import QEvent, QEventLoop, QPoint, QPointF, Qt, QTimer
+from PySide6.QtCore import QEvent, QEventLoop, QPoint, QPointF, QSettings, Qt, QTimer
 from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from shadowvox.gui import StudioWindow
+from shadowvox import __version__, config as C
 
-OUT = ROOT/'out/desktop_preview/shadowvox_ui'
+OUT = ROOT/'out/releases'/__version__/'workflow'
 
 
 def contrast_checks():
@@ -93,7 +95,7 @@ class Harness:
         self.wait(300); self.window.grab().save(str(OUT/(name+'.png')))
 
 
-def run():
+def check_gui():
     OUT.mkdir(parents=True, exist_ok=True)
     evidence = {'contrast': contrast_checks()}
     h = Harness(); w = h.window
@@ -116,10 +118,10 @@ def run():
     assert js("localStorage.getItem('sv_param_strength')") == '75'
 
     # 开关：混音旁路使整块变淡并锁住，开关本身仍可点；降噪电源锁住旋钮
-    h.click('[data-rack=mix] [data-switch=mix_effects]')
+    h.click('[data-switch=mix_effects]')
     assert js("document.querySelector('[data-rack=mix] .rack-body').inert && document.querySelector('.cell[data-key=target_lufs]').inert")
     h.shot('mix-bypassed')
-    h.click('[data-rack=mix] [data-switch=mix_effects]'); assert js('SW.mix_effects && !document.querySelector("[data-rack=mix] .rack-body").inert')
+    h.click('[data-switch=mix_effects]'); assert js('SW.mix_effects && !document.querySelector("[data-rack=mix] .rack-body").inert')
     h.click('[data-switch=denoise]'); assert js("!SW.denoise && document.querySelector('.cell[data-key=denoise_strength] .knob-wrap').inert")
     h.click('[data-switch=denoise]'); assert js('SW.denoise')
 
@@ -199,6 +201,13 @@ def run():
     (OUT/'result.json').write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps(evidence, ensure_ascii=False))
     w.close(); h.app.quit()
+
+
+def run():
+    OUT.mkdir(parents=True,exist_ok=True)
+    C.DATA_ROOT=OUT/'profile';C.DATA_ROOT.mkdir(exist_ok=True)
+    with patch('shadowvox.gui.QSettings',side_effect=lambda *args: QSettings(str(OUT/'window.ini'),QSettings.Format.IniFormat)):
+        check_gui()
 
 
 if __name__ == '__main__':
