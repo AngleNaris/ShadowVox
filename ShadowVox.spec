@@ -23,10 +23,13 @@ version_info=VSVersionInfo(
 datas=[(str(root/'THIRD_PARTY.txt'),'licenses'),(str(root/'models/fcpe.onnx'),'models'),
        (str(root/'models/Kim_Vocal_2.onnx'),'models'),
        (str(root/'models/whisper-base.pt'),'models'),
+       (str(root/'models/hubertfa'),'models/hubertfa'),
        (str(root/'models/hifigan_pkg/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx'),'models/hifigan_pkg'),
        (str(root/'assets/shadowvox.ico'),'assets'),
        (str(root/'src/shadowvox/ui'),'shadowvox/ui'),
        (str(root/'src/shadowvox/vendor/synctoolbox/LICENSE'),'licenses/synctoolbox'),
+       (str(root/'src/shadowvox/vendor/hubertfa/LICENSE'),'licenses/hubertfa'),
+       (str(root/'src/shadowvox/vendor/hubertfa/ORIGIN.txt'),'licenses/hubertfa'),
        (str(root/'tools/vendor/deepfilternet/licenses'),'licenses/deepfilternet')]
 # 整句对齐与 R3 变速：官方 Rubber Band 命令行（GPL-2.0-or-later）及其 libsndfile。
 rubberband=root/'tools/vendor/rubberband-4.0.0/rubberband-4.0.0-gpl-executable-windows'

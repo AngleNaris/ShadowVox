@@ -1,0 +1,13 @@
+HubertFA inference subset
+https://github.com/wolfgitpr/HubertFA
+Commit: b3f086966946255a05b0ccb69c865c8e3e806e0a
+License: Apache-2.0 (see LICENSE)
+
+Copied align_word.py and g2p.py unchanged.
+decoder.py uses a package-relative import. Plotting and NonLexicalDecoder
+were removed; AlignmentDecoder numerical inference is unchanged.
+This subset does not require matplotlib, training code or textgrid.
+
+Model: official release v0.0.7, 1218_hfa_model_new_dict.zip
+Release archive SHA-256:
+48bd6dbcc293e47cc6cbcc556baf575e3d91d61d0ac88ddeccd6098f8f346fa2

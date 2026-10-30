@@ -10,6 +10,8 @@ OVERLAP_FRAMES = 32      # 0.37s
 
 
 def _default_providers():
+    if C.CPU_ONLY:
+        return ['CPUExecutionProvider']
     avail = ort.get_available_providers()
     for p in ("DmlExecutionProvider", "CUDAExecutionProvider"):
         if p in avail:

@@ -55,8 +55,12 @@ class PreviewCache:
         plan = self.data.get('rhythm_plan')
         if plan is None:
             align(source, self.data['reference_original'], C.VOC_SR, log=lambda _: None,
-                  capture=self.data, max_rate=opts.rhythm_max_rate)
+                  capture=self.data, max_rate=opts.rhythm_max_rate, backend=opts.alignment_backend)
             plan = self.data['rhythm_plan']
+        if plan.get('backend') == 'hubertfa_zh':
+            from .hubert_alignment import plan_segments as chinese_plan
+            pieces, stats = chinese_plan(plan, opts.rhythm_strength, opts.rhythm_max_rate)
+            return pieces, stats, 0.
         pieces, stats = plan_segments(plan['dry_t'], plan['ref_t'], plan['dry_seconds'],
             plan['ref_seconds'], plan['voiced'], anchors=plan['anchors'], offset=plan['offset'],
             acoustic_trusted=plan['acoustic_trusted'], strength=opts.rhythm_strength,
@@ -81,7 +85,7 @@ class PreviewCache:
         from .full_align import render_segments
         return render_segments(source, pieces, C.VOC_SR, start=start, end=end)
 
-    def _pitch(self, vocal, reference, opts, protected, start):
+    def _pitch(self, vocal, reference, opts, protected, start, mapping=None):
         if not opts.strength:
             return vocal
         from .f0 import FcpeExtractor
@@ -91,8 +95,15 @@ class PreviewCache:
             self.extractor = FcpeExtractor()
         dry_f0 = self.extractor.extract(vocal, C.VOC_SR)
         ref_f0 = self.extractor.extract(reference, C.VOC_SR)
+        pitch_reference = {}
+        if mapping is not None:
+            from .full_align import pitch_mapping
+            times, valid = pitch_mapping(*mapping, len(dry_f0), C.F0_FRAME_RATE, start/C.VOC_SR)
+            pitch_reference = dict(reference_times=times-start/C.VOC_SR, reference_valid=valid)
+            protected = []
         shift = estimate_shift(dry_f0, ref_f0, strength=opts.strength,
-                               max_shift_cents=450, offset_override=0., pitch_mode='register').shift_cents
+                               max_shift_cents=450, offset_override=0., pitch_mode='register',
+                               **pitch_reference).shift_cents
         for lo, hi in protected:
             a = max(0, round((lo-start/C.VOC_SR) * C.F0_FRAME_RATE))
             b = max(0, round((hi-start/C.VOC_SR) * C.F0_FRAME_RATE))
@@ -121,10 +132,12 @@ class PreviewCache:
                 if initial_strength:
                     self.full_shift = self.data['shift_cents'] / initial_strength
                 else:
+                    pitch_reference = self.data.get('pitch_reference', {})
                     self.full_shift = estimate_shift(self.data['dry_f0'], self.data['ref_f0'],
                         strength=1., max_shift_cents=450, offset_override=-self.data['move'],
-                        pitch_mode='register').shift_cents
-                    for lo, hi in self.report.get('rhythm', {}).get('protected_intervals_seconds', []):
+                        pitch_mode='register', **pitch_reference).shift_cents
+                    protected = [] if pitch_reference else self.report.get('rhythm', {}).get('protected_intervals_seconds', [])
+                    for lo, hi in protected:
                         self.full_shift[round(lo*C.F0_FRAME_RATE):round(hi*C.F0_FRAME_RATE)] = 0
             move = self.data['move']
             vocal = self._placed(self.data['aligned_dry'], start, end, move)
@@ -136,6 +149,7 @@ class PreviewCache:
             vocal *= self.data['vocal_normalization'] * 10 ** (opts.vocal_gain_db / 20)
             accompaniment = self.data['inst'][:, start:end].copy()
         else:
+            mapping = None
             if opts.rhythm and opts.rhythm_strength:
                 raw = self.data['dry_before_denoise'] if self.initial['declip'] else self.data['dry_input']
                 pieces, stats, _ = self.plan(opts, raw)
@@ -148,6 +162,7 @@ class PreviewCache:
                 segment = (min(bounds)*sr, max(bounds)*sr) if bounds else (0, 0)
                 source = self.source(opts, segment=segment)
                 vocal, protected = self._warped(source, pieces, start, end)
+                mapping = (pieces, self.data['rhythm_plan'])
             else:
                 move = 0.
                 reference_shift = 0.
@@ -158,7 +173,7 @@ class PreviewCache:
             local_reference = reference
             original_bed = self.data['inst_original']
             accompaniment = np.vstack([self._placed(ch, start, end, reference_shift) for ch in original_bed])
-            vocal = self._pitch(vocal, reference, opts, protected, start)
+            vocal = self._pitch(vocal, reference, opts, protected, start, mapping)
             vocal *= self.data['vocal_normalization'] * 10 ** (opts.vocal_gain_db / 20)
         # 较短尾段补零，保证滤波器与包络计算有足够输入。
         length = len(vocal)

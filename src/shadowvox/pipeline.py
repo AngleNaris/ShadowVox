@@ -26,6 +26,7 @@ class Options:
     rhythm: bool = True             # 入点级节奏对齐（跟原唱对齐，只修入点，不逐字硬贴）
     rhythm_max_rate: float = 0.10   # 局部时间伸缩上限，10%=最多拉伸/压缩 10%
     rhythm_mode: str = "guarded"    # guarded 只修可信入点 | full 整句逐帧贴齐原唱（需 Rubber Band）
+    alignment_backend: str = "hubertfa_zh"  # 当前桌面仅支持中文歌声
     separate_model: str = DEFAULT_MODEL
     reuse_stems: bool = True
     mix: bool = True
@@ -197,12 +198,14 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
     # 未开启节奏处理时保持原位置，不能靠音高相似度暗中平移或裁掉开头。
     onset_offset = 0.0
     before_move = None
+    pitch_reference = {}
     if opts.rhythm and opts.rhythm_strength and opts.rhythm_mode == "full":
-        from .full_align import align
+        from .full_align import align, pitch_mapping
+        alignment_capture = capture if capture is not None else {}
         log('[节奏] 整句对齐到原唱')
         dry, rstat = align(dry, ref_vocal, C.VOC_SR, log=log,
-                           strength=opts.rhythm_strength, capture=capture,
-                           max_rate=opts.rhythm_max_rate)
+                           strength=opts.rhythm_strength, capture=alignment_capture,
+                           max_rate=opts.rhythm_max_rate, backend=opts.alignment_backend)
         report["rhythm"] = rstat
         reference_shift = rstat.get("reference_shift_seconds", 0.)
         if reference_shift:
@@ -213,6 +216,14 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
         onset_offset = 0.0              # 已在原唱时间线上
         before_move = rstat["median_offset_seconds"] + reference_shift
         dry_f0 = fcpe.extract(dry, C.VOC_SR)
+        reference_times, reference_valid = pitch_mapping(alignment_capture['rhythm_pieces'],
+            alignment_capture['rhythm_plan'], len(dry_f0), C.F0_FRAME_RATE)
+        pitch_reference = dict(reference_times=reference_times, reference_valid=reference_valid)
+        report['pitch_reference'] = {'basis': 'independent_correspondence',
+            'trusted_seconds': round(float(reference_valid.sum()) / C.F0_FRAME_RATE, 3),
+            'voiced_trusted_frames': int(np.sum(reference_valid & (dry_f0 > 0)))}
+        if capture is not None:
+            capture['pitch_reference'] = pitch_reference
     elif opts.rhythm and opts.rhythm_strength:
         log('[节奏] 检查可靠起音并匹配节奏')
         dry, rstat = rhythm.align_to_reference(
@@ -239,7 +250,7 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
                          max_shift_cents=opts.max_shift_cents,
                          smooth_ms=opts.smooth_ms,
                          pitch_mode=opts.pitch_mode,
-                         offset_override=onset_offset)
+                         offset_override=onset_offset, **pitch_reference)
 
     # 八度策略：默认 auto 只在干声本音区内修正（保留演唱者音色）；
     # match 会把干声整体搬到原唱音区，适合“低八度/高八度跟唱”。
@@ -255,11 +266,12 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
                                  max_shift_cents=opts.max_shift_cents,
                                  smooth_ms=opts.smooth_ms,
                                  pitch_mode=opts.pitch_mode,
-                                 offset_override=onset_offset)
+                                 offset_override=onset_offset, **pitch_reference)
     report["octave_shift"] = octave_delta
 
-    # 不可靠节奏区域也不按错误参考音符强行修音。
-    for start,end in report.get("rhythm",{}).get("protected_intervals_seconds",[]):
+    # 完整模式使用独立对应证据；旧 guarded 模式仍沿用其拒绝区域。
+    protected = [] if pitch_reference else report.get("rhythm",{}).get("protected_intervals_seconds",[])
+    for start,end in protected:
         res.shift_cents[round(start*C.F0_FRAME_RATE):round(end*C.F0_FRAME_RATE)] = 0
         res.confidence[round(start*C.F0_FRAME_RATE):round(end*C.F0_FRAME_RATE)] = 0
     # 原曲结束后的保留人声没有可用参考，不能沿用最后一个音高。

@@ -126,6 +126,8 @@ class FcpeExtractor:
 
 
 def _default_providers():
+    if C.CPU_ONLY:
+        return ['CPUExecutionProvider']
     avail = ort.get_available_providers()
     for p in ("DmlExecutionProvider", "CUDAExecutionProvider"):
         if p in avail:

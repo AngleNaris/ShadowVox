@@ -223,7 +223,8 @@ def plan_segments(dry_t, ref_t, dry_seconds, ref_seconds, voiced, anchors=None, 
     return pieces, stats
 
 
-def _acoustic_support(c1, c2, dry_t, ref_t, voiced, anchors, offset=0.):
+def _correspondence_support(c1, c2, dry_t, ref_t, voiced, anchors, offset=0.):
+    """对应关系的证据；不包含变时幅度、边界或渲染是否成功。"""
     grid = np.arange(len(voiced)) * KEY_SECONDS
     ref_grid = np.interp(grid, dry_t, ref_t)
     left = np.clip(np.rint(grid * FEATURE_RATE).astype(int), 0, c1.shape[1] - 1)
@@ -234,16 +235,50 @@ def _acoustic_support(c1, c2, dry_t, ref_t, voiced, anchors, offset=0.):
     similarity = uniform_filter1d(similarity, size=9, mode="nearest")
     speed = np.interp(grid + .5, dry_t, ref_t) - np.interp(grid - .5, dry_t, ref_t)
     valid = voiced & (similarity >= .6) & (speed >= .8) & (speed <= 1.2)
-    valid &= np.abs(ref_grid - grid - offset) <= MAX_LOCAL_SHIFT
     if anchors is not None:
         words_ok, expected = _lyric_support(grid, anchors, offset)
         valid &= words_ok & (np.abs(ref_grid - grid - expected) <= .15)
     return valid
 
 
+def _acoustic_support(c1, c2, dry_t, ref_t, voiced, anchors, offset=0.):
+    valid = _correspondence_support(c1, c2, dry_t, ref_t, voiced, anchors, offset)
+    grid = np.arange(len(voiced)) * KEY_SECONDS
+    return valid & (np.abs(np.interp(grid, dry_t, ref_t) - grid - offset) <= MAX_LOCAL_SHIFT)
+
+
+def pitch_mapping(pieces, plan, frame_count, frame_rate=100., start_seconds=0.):
+    """实际输出→原声→参考；变时回退只改变第一步，不否决对应证据。"""
+    source = np.concatenate([p['source'][:-1] for p in pieces] + [pieces[-1]['source'][-1:]])
+    output = np.concatenate([p['target'][:-1] for p in pieces] + [pieces[-1]['target'][-1:]])
+    times = start_seconds + np.arange(frame_count) / frame_rate
+    source_times = np.interp(times, output, source)
+    reference_shift = max(0., -plan['offset'])
+    reference_times = np.interp(source_times, plan['dry_t'], plan['ref_t']) + reference_shift
+    # 旧缓存没有独立证据时，沿用已经通过检查的声学证据，不能全轨放行。
+    evidence = plan.get('correspondence_trusted', plan['acoustic_trusted'])
+    cells = np.floor(source_times / KEY_SECONDS + 1e-8).astype(int)
+    valid = evidence[np.clip(cells, 0, len(evidence)-1)].copy()
+    valid &= (times >= output[0]) & (times < output[-1])
+    valid &= (source_times >= plan['dry_t'][0]) & (source_times <= plan['dry_t'][-1])
+    valid &= (reference_times >= reference_shift) & (reference_times < plan['ref_seconds'] + reference_shift)
+    return reference_times, valid
+
+
 def render_segments(dry, pieces, sr, start=0, end=None):
-    """整曲与草稿共用入口；保护片段不淡出、不重合成。"""
+    """整曲与草稿共用入口；中文模式连续变时，旧分段模式的保护片段直接旁路。"""
     end = round(pieces[-1]["target"][-1] * sr) if end is None else end
+    if pieces[0].get('continuous'):
+        source = np.concatenate([p['source'][:-1] for p in pieces]+[pieces[-1]['source'][-1:]])
+        target = np.concatenate([p['target'][:-1] for p in pieces]+[pieces[-1]['target'][-1:]])
+        rendered = dry.copy() if np.max(abs(target-source)) < 1e-7 else stretch(dry,source,target,sr)
+        if abs(len(rendered)-len(dry)) > 2:
+            raise RuntimeError('中文对齐输出长度不符，已停止导出')
+        rendered = np.pad(rendered,(0,max(0,len(dry)-len(rendered))),mode='edge')[:len(dry)]
+        out = np.zeros(end-start,dtype=np.float32)
+        lo,hi = max(0,start),min(end,len(rendered))
+        if hi > lo: out[lo-start:hi-start] = rendered[lo:hi]
+        return out, [(float(p['target'][0]),float(p['target'][-1])) for p in pieces if p['protected']]
     out = np.zeros(end - start, dtype=np.float32)
     protected = []
     for piece in pieces:
@@ -291,7 +326,11 @@ def render_segments(dry, pieces, sr, start=0, end=None):
     return out, protected
 
 
-def align(dry, reference, sr, use_lyrics=True, log=print, strength=1., capture=None, max_rate=.10):
+def align(dry, reference, sr, use_lyrics=True, log=print, strength=1., capture=None, max_rate=.10,
+          backend='legacy'):
+    if backend == 'hubertfa_zh':
+        from .hubert_alignment import align as chinese_align
+        return chinese_align(dry,reference,sr,log,strength,capture,max_rate)
     c1, o1 = features(dry, sr)
     c2, o2 = features(reference, sr)
     dry_t, ref_t = _warping_path(c1, o1, c2, o2)
@@ -323,7 +362,8 @@ def align(dry, reference, sr, use_lyrics=True, log=print, strength=1., capture=N
                 voiced=voiced, anchors=anchors, offset=offset, acoustic_trusted=acoustic_trusted)
     pieces, stats = plan_segments(**plan, strength=strength, max_rate=max_rate)
     if capture is not None:
-        capture['rhythm_plan'] = plan
+        capture['rhythm_plan'] = dict(plan, correspondence_trusted=_correspondence_support(
+            c1, c2, dry_t, ref_t, voiced, anchors, offset))
     length = max(len(reference) + round(stats['reference_shift_seconds'] * sr),
                  round(pieces[-1]['target'][-1] * sr))
     out, _ = render_segments(dry, pieces, sr, end=length)

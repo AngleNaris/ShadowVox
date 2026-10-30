@@ -225,7 +225,7 @@ def _banded_dtw(c_dry, c_ref, v_dry, v_ref, band_frames, diag_prior=0.03):
 
 def estimate_shift(dry_f0, ref_f0, strength=1.0, max_shift_cents=700.0,
                    smooth_ms=0.0, band_seconds=0.30, offset_override=None,
-                   pitch_mode="frame"):
+                   pitch_mode="frame", reference_times=None, reference_valid=None):
     nd = len(dry_f0)
     if nd == 0 or len(ref_f0) == 0:
         raise ValueError("音高曲线为空")
@@ -245,6 +245,69 @@ def estimate_shift(dry_f0, ref_f0, strength=1.0, max_shift_cents=700.0,
         # 色度精度只有 ±100ms（分不清 0 与 ±1 格），且可能判错方向 ——
         # 直接在 ±1.5s 内用音高误差全局精扫，不再受色度起点约束。
         offset, pitch_err = _refine_by_pitch(dry_f0, ref_f0, None, radius_s=1.5)
+    if reference_times is None:
+        ref_map = _pitch_reference_map(d10, r10, nd, offset, band_seconds)
+    else:
+        ref_map = np.asarray(reference_times) * F0_FPS
+        if ref_map.shape != (nd,) or reference_valid is None or np.shape(reference_valid) != (nd,):
+            raise ValueError("外部音高对应需要等长的参考时标与可信掩码")
+
+    ref_c = cent(ref_f0)
+    idx = np.clip(np.rint(ref_map).astype(np.int64), 0, len(ref_f0) - 1)
+    target = ref_c[idx]
+    voiced = (dry_f0 > 0) & (ref_f0[idx] > 0)
+    if reference_times is not None:
+        voiced &= np.asarray(reference_valid, dtype=bool) & (ref_map >= 0) & (ref_map <= len(ref_f0)-1)
+
+    dry_c = cent(dry_f0)
+    octave = np.rint((dry_c - target) / 1200.0)
+    target_folded = target + 1200.0 * octave
+    raw = np.where(voiced, target_folded - dry_c, 0.0)
+
+    pc_gap = np.mod(np.abs(np.mod(target, 1200.0) - np.mod(dry_c, 1200.0)), 1200.0)
+    pc_gap = np.minimum(pc_gap, 1200.0 - pc_gap)
+    confidence = np.clip(1.0 - (pc_gap - 80.0) / 220.0, 0.0, 1.0)
+
+    register_stats = {}
+    if pitch_mode == "register":
+        from .register import register_shift
+        shift, reliable, octave = register_shift(dry_c, target, voiced, strength,
+                                                  min(max_shift_cents, 450))
+        confidence = reliable.astype(float)
+        register_stats = {"register_skipped_frames": int((voiced & ~reliable).sum()),
+                          "register_octave_counts": {
+                              str(int(k)): int(np.sum(octave[voiced] == k))
+                              for k in np.unique(octave[voiced])}}
+    elif pitch_mode == "natural":
+        from .natural import center_shift
+        shift = center_shift(dry_c, target_folded, voiced, strength, max_shift_cents)
+    elif pitch_mode == "frame":
+        shift = _smooth(raw, int(smooth_ms / 1000.0 * F0_FPS))
+        shift = np.clip(shift, -max_shift_cents, max_shift_cents) * confidence * float(strength)
+    else:
+        raise ValueError(f"未知音高模式: {pitch_mode}")
+    shift[~voiced] = 0.0
+    confidence[~voiced] = 0.0
+
+    stats = {
+        "offset_seconds": offset,
+        "offset_coarse_seconds": offset_coarse,
+        "pitch_error_cents": round(pitch_err, 1) if np.isfinite(pitch_err) else None,
+        "aligned_frames": int(voiced.sum()),
+        "voiced_ratio": float(voiced.mean()) if nd else 0.0,
+        "mean_abs_shift_cents": float(np.abs(shift[voiced]).mean()) if voiced.any() else 0.0,
+        "max_abs_shift_cents": float(np.abs(shift).max()) if nd else 0.0,
+        "mean_confidence": float(confidence[voiced].mean()) if voiced.any() else 0.0,
+        "octave_folded_frames": int(np.count_nonzero(octave[voiced])),
+        **register_stats,
+    }
+    return ShiftResult(shift_cents=shift, confidence=confidence,
+                       offset_seconds=offset, stats=stats)
+
+
+def _pitch_reference_map(d10, r10, nd, offset, band_seconds):
+    """没有独立对应路径时，沿用原有 F0 匹配。"""
+    fps = COARSE_FPS
     lag_frames = int(round(offset * fps))
     # DTW 只能在整数帧上裁窗口，但**映射时必须用小数偏移**：
     # 否则 <100ms 的偏移会被量化掉一半（实测残差 50ms，音准 24→40 音分）。
@@ -278,56 +341,7 @@ def estimate_shift(dry_f0, ref_f0, strength=1.0, max_shift_cents=700.0,
     t10 = np.arange(nd, dtype=np.float64) / F0_FPS          # 秒
     ref_map = np.interp(t10, grid / fps, ref_map10) * (F0_FPS / fps)
 
-    ref_c = cent(ref_f0)
-    idx = np.clip(np.rint(ref_map).astype(np.int64), 0, len(ref_f0) - 1)
-    target = ref_c[idx]
-    voiced = (dry_f0 > 0) & (ref_f0[idx] > 0)
-
-    dry_c = cent(dry_f0)
-    octave = np.rint((dry_c - target) / 1200.0)
-    target_folded = target + 1200.0 * octave
-    raw = np.where(voiced, target_folded - dry_c, 0.0)
-
-    # 置信度：映射点离参考曲线越远（音级不匹配）越不可信
-    pc_gap = np.mod(np.abs(np.mod(target, 1200.0) - np.mod(dry_c, 1200.0)), 1200.0)
-    pc_gap = np.minimum(pc_gap, 1200.0 - pc_gap)
-    confidence = np.clip(1.0 - (pc_gap - 80.0) / 220.0, 0.0, 1.0)
-
-    register_stats = {}
-    if pitch_mode == "register":
-        from .register import register_shift
-        shift, reliable, octave = register_shift(dry_c, target, voiced, strength,
-                                                  min(max_shift_cents, 450))
-        confidence = reliable.astype(float)
-        register_stats = {"register_skipped_frames": int((voiced & ~reliable).sum()),
-                          "register_octave_counts": {
-                              str(int(k)): int(np.sum(octave[voiced] == k))
-                              for k in np.unique(octave[voiced])}}
-    elif pitch_mode == "natural":
-        from .natural import center_shift
-        shift = center_shift(dry_c, target_folded, voiced, strength, max_shift_cents)
-    elif pitch_mode == "frame":
-        shift = _smooth(raw, int(smooth_ms / 1000.0 * F0_FPS))
-        shift = np.clip(shift, -max_shift_cents, max_shift_cents) * confidence * float(strength)
-    else:
-        raise ValueError(f"未知音高模式: {pitch_mode}")
-    shift[~voiced] = 0.0
-
-    stats = {
-        "offset_seconds": offset,
-        "offset_coarse_seconds": offset_coarse,
-        "pitch_error_cents": round(pitch_err, 1) if np.isfinite(pitch_err) else None,
-        "aligned_frames": int(voiced.sum()),
-        "voiced_ratio": float(voiced.mean()) if nd else 0.0,
-        "mean_abs_shift_cents": float(np.abs(shift[voiced]).mean()) if voiced.any() else 0.0,
-        "max_abs_shift_cents": float(np.abs(shift).max()) if nd else 0.0,
-        "mean_confidence": float(confidence[voiced].mean()) if voiced.any() else 0.0,
-        # 折叠到干声音区的帧数（不是异常指标：整首低八度演唱时该值会接近全部浊音帧）
-        "octave_folded_frames": int(np.count_nonzero(octave[voiced])),
-        **register_stats,
-    }
-    return ShiftResult(shift_cents=shift, confidence=confidence,
-                       offset_seconds=offset, stats=stats)
+    return ref_map
 
 
 def voiced_onsets(f0, min_dur=0.06):

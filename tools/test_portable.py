@@ -56,7 +56,7 @@ def run():
                  report['dry_seconds_after_rhythm'])
     assert abs(len(samples)/sr-expected)<.02
     # 冻结程序必须实际走 PSOLA + 整句对齐（numba、内置 Rubber Band 均可用）。
-    assert report['options']['renderer']=='psola' and report['rhythm']['algorithm'].startswith('synctoolbox')
+    assert report['options']['renderer']=='psola' and report['rhythm']['algorithm']=='hubertfa-zh+rubberband-r3-v1'
     assert 'lyric_error' not in report['rhythm'],report['rhythm'].get('lyric_error')
     lufs,peak=measure_loudness(output)
     assert peak<=-1.45,(lufs,peak)

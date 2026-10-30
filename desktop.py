@@ -7,6 +7,22 @@ if not getattr(sys,"frozen",False):
 
 
 def main():
+    # 冷启动离线验收：拒绝 Python 层外部连接；正常运行不启用该钩子。
+    import os
+    if os.environ.get('SHADOWVOX_OFFLINE_TEST') == '1':
+        import socket
+        original_connect = socket.socket.connect
+        original_connect_ex = socket.socket.connect_ex
+        def local_only(address):
+            return isinstance(address, tuple) and (address[0] in ('localhost','::1') or str(address[0]).startswith('127.'))
+        def connect(sock,address):
+            if not local_only(address): raise RuntimeError('离线验收禁止外部连接')
+            return original_connect(sock,address)
+        def connect_ex(sock,address):
+            if not local_only(address): raise RuntimeError('离线验收禁止外部连接')
+            return original_connect_ex(sock,address)
+        socket.socket.connect = connect
+        socket.socket.connect_ex = connect_ex
     if len(sys.argv)==5 and sys.argv[1]=="--plugin-editor":
         try:
             from shadowvox.vst_host import open_editor

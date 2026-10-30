@@ -55,3 +55,9 @@ ShadowVox 桌面版依赖与模型说明（原名 Atune）
 原 audio-separator 路径仅在源码环境选择其他分离模型时保留。
 
 当前交付是本地实验工具；没有将声码器权重标成允许商业使用的模型。
+HubertFA (Chinese singing alignment)
+  Source: https://github.com/wolfgitpr/HubertFA
+  Commit: b3f086966946255a05b0ccb69c865c8e3e806e0a
+  Code license: Apache-2.0; bundled in licenses/hubertfa.
+  Official model: v0.0.7 / 1218_hfa_model_new_dict.zip; complete model files bundled.
+  Inference subset uses relative imports and omits plotting/non-lexical decoding.

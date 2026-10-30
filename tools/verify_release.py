@@ -34,7 +34,7 @@ def check_archive(executable):
     package = CArchiveReader(str(executable))
     modules = package.open_embedded_archive('PYZ.pyz')
     checked = []
-    for name in ('__init__', 'full_align', 'lyric_anchors', 'pipeline', 'live_preview', 'psola',
+    for name in ('__init__', 'align', 'hubert_alignment', 'full_align', 'lyric_anchors', 'pipeline', 'live_preview', 'psola',
                  'mixing', 'vocal_body', 'gui', 'gui_bridge', 'reporting', 'report_analysis', 'denoise'):
         path = ROOT/'src/shadowvox'/f'{name}.py'
         key = 'shadowvox' if name == '__init__' else f'shadowvox.{name}'
@@ -48,11 +48,21 @@ def check_archive(executable):
             assets.append(key)
     helper = 'bin\\shadowvox-denoise.exe'
     assert hashlib.sha256(package.extract(helper)).hexdigest() == digest(ROOT/'tools/vendor/deepfilternet/shadowvox-denoise.exe')
+    model_files = []
+    for path in (ROOT/'models').rglob('*'):
+        key = str(path.relative_to(ROOT))
+        if path.is_file() and key in package.toc:
+            assert hashlib.sha256(package.extract(key)).hexdigest() == digest(path), key
+            model_files.append(key)
+    assert 'models\\hubertfa\\model.onnx' in model_files
+    for key in ('bin\\ffmpeg.exe','bin\\rubberband.exe','bin\\sndfile.dll',
+                'models\\whisper-base.pt','models\\fcpe.onnx','models\\Kim_Vocal_2.onnx'):
+        assert key in package.toc, key
     info = read_version_info_from_executable(str(executable))
     assert __version__ in str(info), 'Windows 版本属性不一致'
     manifest = json.loads(executable.with_suffix('.release.json').read_text(encoding='utf-8'))
     assert manifest['version'] == __version__ and manifest['executable']['sha256'] == digest(executable)
-    return dict(modules=checked, assets=assets, denoise_helper_matches=True, windows_version=__version__)
+    return dict(modules=checked, assets=assets, model_files=model_files, denoise_helper_matches=True, windows_version=__version__)
 
 
 def main():
@@ -90,18 +100,25 @@ def main():
     env.pop('QT_QPA_PLATFORM', None)
     env['PATH'] = str(Path(os.environ['SystemRoot'])/'System32')
     env['LOCALAPPDATA'] = str(folder/'userdata')
+    env['APPDATA'] = str(folder/'roaming')
+    env['SHADOWVOX_OFFLINE_TEST'] = '1'
+    env['HF_HUB_OFFLINE'] = '1'
+    env['HTTP_PROXY'] = env['HTTPS_PROXY'] = 'http://127.0.0.1:1'
     request['output'] = str(folder/'frozen.wav')
+    request['work'] = str(folder/'fresh-cache')
+    request['reuse_stems'] = False
     request_path = folder/'process-request.json'
     request_path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
     start = time.monotonic()
     process = subprocess.run([str(executable), '--process', str(request_path)], cwd=folder,
-                             env=env, creationflags=subprocess.CREATE_NO_WINDOW, timeout=240)
+                             env=env, creationflags=subprocess.CREATE_NO_WINDOW, timeout=1800)
     assert process.returncode == 0, (folder/'frozen.log').read_text(encoding='utf-8')
     frozen = json.loads((folder/'frozen.report.json').read_text(encoding='utf-8'))
     assert frozen['app_version'] == __version__
     assert frozen['mixing']['mix_preset'] == 'B_light_third'
     rhythm = frozen['rhythm']
-    assert rhythm['algorithm'] == 'conservative-lyrics+rubberband-r3-v2'
+    assert rhythm['algorithm'] == 'hubertfa-zh+rubberband-r3-v1'
+    assert rhythm['language'] == 'zh' and rhythm['lyric_anchors'] > 0
     assert rhythm['order_preserved'] and rhythm['continuous_source_coverage']
     assert rhythm['rate_min'] >= .9 and rhythm['rate_max'] <= 1.1
     assert frozen['denoise']['model'] == 'DeepFilterNet3'

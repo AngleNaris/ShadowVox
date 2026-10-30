@@ -5,6 +5,7 @@ import sys
 
 ROOT = Path(sys._MEIPASS) if getattr(sys,"frozen",False) else Path(__file__).resolve().parents[2]
 MODELS = ROOT / "models"
+CPU_ONLY = os.environ.get('SHADOWVOX_CPU_ONLY') == '1'
 DATA_ROOT = Path(os.environ.get("LOCALAPPDATA",str(Path.home()))) / "ShadowVox" if getattr(sys,"frozen",False) else ROOT
 # 改名前的数据目录（分离缓存、VST3 设置）首次启动时整体迁移，避免重新分离整曲。
 _LEGACY = DATA_ROOT.parent / "Atune"
