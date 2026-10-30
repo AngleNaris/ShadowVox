@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShadowVox</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+
+<!-- 处理特效层：仅在生成成品期间淡入，结束时沿原路淡出 -->
+<canvas id="fx" class="fx" aria-hidden="true"></canvas>
+
+<!-- 图标集：统一 24 网格、2px 直角描边；按钮只引用，不内联 -->
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M7 4v16l13-8z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M6 4h4v16H6zM14 4h4v16h-4z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M6 6h12v12H6z"/></symbol>
+  <symbol id="i-skip" viewBox="0 0 24 24"><path d="M6 5v14"/><path fill="currentColor" stroke="none" d="M19 5 9 12l10 7z"/></symbol>
+  <symbol id="i-loop" viewBox="0 0 24 24"><path d="M4 11V7h14M15 4l3 3-3 3M20 13v4H6M9 20l-3-3 3-3"/></symbol>
+  <symbol id="i-delta" viewBox="0 0 24 24"><path d="M12 4 21 20H3Z"/></symbol>
+  <symbol id="i-raw" viewBox="0 0 24 24"><path d="M2 12h3l2-6 3 12 3-9 2 6 2-3h5"/></symbol>
+  <symbol id="i-draft" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></symbol>
+  <symbol id="i-master" viewBox="0 0 24 24"><path d="M4 4h16v16H4zM8 12l3 3 5-6"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 17V5l11-2v12"/><path d="M3 15h6v5H3zM14 13h6v5h-6z"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><path d="M9 3h6v10H9zM5 11v1a7 7 0 0 0 14 0v-1M12 19v3M8 22h8"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 5h7l2 3h9v11H3z"/></symbol>
+  <symbol id="i-reveal" viewBox="0 0 24 24"><path d="M3 19V5h7l2 3h9v3M3 19h15l3-8H6z"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 16v5h16v-5"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M6 3v18M12 3v18M18 3v18"/><path fill="currentColor" stroke="none" d="M3 13h6v4H3zM9 6h6v4H9zM15 11h6v4h-6z"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 3v17h17M8 16v-4M12 16V7M16 16v-6M20 16v-2"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><path d="M9 9V7.5A3 3 0 0 1 12 5a3 3 0 0 1 1.2 5.8c-.8.4-1.2 1-1.2 1.9V14M12 17v2"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8M7 6.3A8 8 0 1 0 17 6.3"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M2 12c1.5-4 2.5-6 3.5-6H8c1.2 0 2.4 3 4 6s2.8 6 4 6h2.5c1 0 2-2 3.5-6"/><path d="M2 6h20M2 18h20" stroke-width="1" stroke-dasharray="2 2" opacity=".6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><path d="M8 8h12v12H8zM4 16V4h12"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M4 12l5 5L20 6"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 22 20H2ZM12 9v5M12 16v2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-folder-plus" viewBox="0 0 24 24"><path d="M3 5h7l2 3h9v11H3zM12 11v6M9 14h6"/></symbol>
+  <symbol id="i-open" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
+  <symbol id="i-plugin" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M5 8h14v4a7 7 0 0 1-14 0zM12 19v3"/></symbol>
+  <symbol id="i-disk" viewBox="0 0 24 24"><path d="M3 4h18v16H3zM3 14h18M7 17h2"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 3h9l9 9-9 9-9-9zM8 8h1"/></symbol>
+</svg>
+
+<div class="studio">
+  <div id="live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- 顶栏：品牌即设置入口 + 图标视图切换 -->
+  <header class="topbar rise" style="--d:0ms">
+    <button class="brand" id="btn-settings" type="button" title="设置" aria-label="设置" aria-haspopup="dialog">
+      <img class="brand-mark" src="logo.png" alt="" aria-hidden="true">
+      <span class="brand-name">SHADOWVOX</span>
+    </button>
+    <nav class="tabs" aria-label="视图切换">
+      <span class="tab-glider" id="tab-glider" aria-hidden="true"></span>
+      <button class="tab" id="tab-process" type="button" aria-pressed="true" title="效果器" aria-label="效果器"><svg class="i"><use href="#i-sliders"/></svg></button>
+      <button class="tab" id="tab-report" type="button" aria-pressed="false" title="报告" aria-label="报告"><svg class="i"><use href="#i-chart"/></svg></button>
+    </nav>
+  </header>
+
+  <main class="content" id="content">
+    <!-- 播放器：走带、读数、试听版本、输入文件、监听；缓存状态只长在底部 3px 线上 -->
+    <section class="player rise" id="player" data-cache="empty" style="--d:40ms" aria-label="试听播放器">
+      <div class="player-bar">
+        <div class="transport">
+          <button class="key" id="p-start" type="button" title="回到开头" aria-label="回到开头" disabled><svg class="i"><use href="#i-skip"/></svg></button>
+          <button class="key key-play" id="p-play" type="button" title="播放 / 暂停（空格）" aria-label="播放" disabled><svg class="i i-play"><use href="#i-play"/></svg><svg class="i i-pause"><use href="#i-pause"/></svg></button>
+          <button class="key" id="p-loop" type="button" aria-pressed="false" title="循环；在波形上方的循环带拖选范围" aria-label="循环播放" disabled><svg class="i"><use href="#i-loop"/></svg></button>
+        </div>
+        <div class="readout" aria-live="off">
+          <span class="readout-src" id="p-src">未生成</span>
+          <span class="readout-time"><span id="p-time">00:00.000</span><span class="readout-total" id="p-total"> / 00:00</span></span>
+        </div>
+        <div class="sources" id="p-sources" role="group" aria-label="试听版本">
+          <span class="src-glider" aria-hidden="true"></span>
+          <button class="src" type="button" data-src="0" title="修音前：原始演唱 + 同一伴奏，仅补偿整体偏移" aria-label="修音前" aria-pressed="false" disabled><svg class="i"><use href="#i-raw"/></svg></button>
+          <button class="src" type="button" data-src="1" title="草稿：当前参数在播放位置附近的局部近似" aria-label="草稿" aria-pressed="false" disabled><svg class="i"><use href="#i-draft"/></svg></button>
+          <button class="src" type="button" data-src="2" title="成品：已保存到输出目录的版本" aria-label="成品" aria-pressed="false" disabled><svg class="i"><use href="#i-master"/></svg><span class="src-ver" id="p-ver"></span></button>
+          <button class="src src-menu" id="p-ver-btn" type="button" popovertarget="ver-menu" aria-controls="ver-menu" aria-expanded="false" title="选择成品版本" aria-label="选择成品版本" disabled><svg class="i"><use href="#i-chevron"/></svg></button>
+        </div>
+        <div class="inputs">
+          <button class="chip" id="in-song" type="button" data-kind="song" data-need="请先选择原曲" title="原曲（可拖入）" aria-label="原曲：未选择">
+            <svg class="i"><use href="#i-music"/></svg><span class="chip-name"><span class="mq">原曲</span></span>
+          </button>
+          <button class="chip" id="in-dry" type="button" data-kind="dry" data-need="请先选择演唱干音" title="演唱干音（可拖入）" aria-label="演唱干音：未选择">
+            <svg class="i"><use href="#i-mic"/></svg><span class="chip-name"><span class="mq">干音</span></span>
+          </button>
+        </div>
+        <div class="monitor">
+          <button class="key" id="p-delta" type="button" aria-pressed="false" title="差值监听：当前版本减去修音前，只听处理改变的部分" aria-label="差值监听" disabled><svg class="i"><use href="#i-delta"/></svg></button>
+          <div class="knob knob-sm" id="p-volume" tabindex="0" role="slider" aria-label="监听音量，不影响导出" title="监听音量（不影响导出）" data-min="0" data-max="100" data-step="5" data-default="100"><span class="knob-tick" aria-hidden="true"></span></div>
+          <div class="meter" id="p-meter" aria-hidden="true"><i></i><i></i></div>
+        </div>
+      </div>
+      <div class="timeline">
+        <div class="loop-lane" id="loop-lane" tabindex="0" role="group" aria-label="循环区间：拖选范围，双击或回车精确编辑，方向键移动，Delete 清除" title="拖动空白创建循环；拖两端调整，拖中间移动；双击精确编辑">
+          <div class="loop-region" id="loop-region" hidden><span class="loop-edge" data-edge="a"></span><span class="loop-label" id="loop-label"></span><span class="loop-edge" data-edge="b"></span></div>
+        </div>
+        <div class="track" id="track">
+          <canvas id="wave" aria-hidden="true"></canvas>
+          <div class="ruler" id="ruler" aria-hidden="true"></div>
+          <div class="playhead" id="playhead" aria-hidden="true"></div>
+          <input id="seek" type="range" min="0" max="1" step="0.01" value="0" disabled aria-label="播放位置">
+        </div>
+        <span class="cache-line" aria-hidden="true"></span>
+      </div>
+      <div id="ver-menu" class="menu" popover="auto" role="listbox" aria-label="成品版本"></div>
+    </section>
+
+    <!-- 效果器：输出目录 + 预设，2×2 参数面板（由 app.js 按参数表生成） -->
+    <div class="pane" id="pane-process">
+      <section class="deck rise" style="--d:80ms" aria-label="输出与预设">
+        <button class="out-card" id="out-card" type="button" data-need="请先选择输出目录" title="输出目录：每次生成自动保存为新版本（可拖入文件夹）" aria-label="输出目录：未选择">
+          <svg class="i"><use href="#i-folder"/></svg><span class="out-path" id="out-path"><bdi>选择输出目录</bdi></span>
+        </button>
+        <div class="presets" id="presets" role="group" aria-label="参数预设：左键空槽保存，左键已存槽应用；右键已存槽进入待确认，再右键删除、左键覆盖" title="左键空槽 = 保存当前参数；左键已存槽 = 应用；右键已存槽 = 待确认（再右键删除、左键覆盖，4 秒自动取消）"></div>
+      </section>
+      <section class="racks" id="racks" aria-label="处理参数"></section>
+    </div>
+
+    <!-- 实际结果图表与社交分享图共用同一画面。 -->
+    <section class="pane pane-report" id="pane-report" hidden aria-label="处理报告">
+      <div class="rp-toolbar">
+        <span class="rp-title" id="rp-title">尚无成品</span>
+        <button class="key" id="rp-listen" type="button" title="试听修正示例" aria-label="定位试听修正示例" disabled><svg class="i"><use href="#i-play"/></svg></button>
+        <button class="rp-action" id="rp-export" type="button" disabled><svg class="i"><use href="#i-download"/></svg>导出分享图</button>
+        <button class="key" id="rp-reveal" type="button" title="在文件夹中显示" aria-label="在文件夹中显示成品" disabled><svg class="i"><use href="#i-reveal"/></svg></button>
+      </div>
+      <div class="rp-poster rp-interactive" id="rp-poster" aria-label="声音改造战报"></div>
+      <p class="rp-feedback" id="rp-feedback" role="status" aria-live="polite"></p>
+      <details class="rp-details"><summary>技术详情与测量口径</summary>
+        <div class="rp-detail-columns"><section><h2>处理记录</h2><dl class="rp-list" id="rp-summary"></dl></section>
+        <section><h2>处理参数</h2><dl class="rp-list" id="rp-params"></dl></section></div>
+        <p id="rp-note"></p>
+        <p>音高使用共同有效帧的音级偏差；节奏对比匹配至同一原唱入点的前后结果。音色比较原始干声与空间效果前的汇总人声，按活动段 RMS 电平归一；频段数值是全链路的相对能量变化，不代表清晰度或空气感评分，也不是单项 EQ 的增益。声场取真实成品。</p>
+      </details>
+    </section>
+  </main>
+
+  <!-- 主操作：按钮即进度条；处理中变停止，6 个阶段刻度嵌在按钮底边 -->
+  <footer class="dock rise" id="dock" style="--d:200ms">
+    <button class="go" id="go" type="button" aria-describedby="go-meta">
+      <span class="go-layer go-base"><svg class="i go-icon"><use href="#i-play"/></svg><span class="go-label">VOX!</span><span class="go-meta" id="go-meta"></span></span>
+      <span class="go-layer go-fill" aria-hidden="true"><svg class="i go-icon"><use href="#i-play"/></svg><span class="go-label">VOX!</span><span class="go-meta"></span></span>
+      <span class="go-notches" id="go-notches" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    </button>
+  </footer>
+
+  <!-- 错误弹窗：任何错误都以一致的窗口呈现；成功不显示日志 -->
+  <div class="modal" id="err-modal" role="alertdialog" aria-modal="true" aria-labelledby="err-title" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-box">
+      <div class="modal-head"><svg class="i i-alert"><use href="#i-alert"/></svg><span class="modal-title" id="err-title">处理出错</span>
+        <button class="key key-flat" type="button" data-close title="关闭" aria-label="关闭"><svg class="i"><use href="#i-close"/></svg></button></div>
+      <div class="modal-body" id="err-body"></div>
+      <div class="modal-foot">
+        <button class="key" id="err-copy" type="button" title="复制错误信息" aria-label="复制错误信息"><svg class="i"><use href="#i-copy"/></svg></button>
+        <button class="key key-primary" id="err-ok" type="button" data-close title="知道了" aria-label="知道了"><svg class="i"><use href="#i-check"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 参数说明：非模态、可拖动 -->
+  <div class="help" id="help" role="dialog" aria-modal="false" aria-labelledby="help-title" hidden>
+    <div class="help-head" id="help-drag"><svg class="i"><use href="#i-help"/></svg><span id="help-title">参数说明</span>
+      <button class="key key-flat" id="help-close" type="button" title="关闭" aria-label="关闭说明"><svg class="i"><use href="#i-close"/></svg></button></div>
+    <div class="help-body" id="help-body"></div>
+  </div>
+
+  <!-- 设置：版本 / 缓存 / VST3 -->
+  <div class="modal" id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-box modal-wide">
+      <div class="modal-head"><img class="brand-mark" src="logo.png" alt="" aria-hidden="true"><span class="modal-title" id="settings-title">设置</span>
+        <button class="key key-flat" type="button" data-close title="关闭" aria-label="关闭设置"><svg class="i"><use href="#i-close"/></svg></button></div>
+      <div class="modal-body set-body">
+        <div class="set-row"><svg class="i"><use href="#i-tag"/></svg><span class="set-label">版本</span><span class="set-value" id="set-version">—</span></div>
+        <div class="set-row"><svg class="i"><use href="#i-disk"/></svg><span class="set-label">分离缓存</span><span class="set-value" id="set-cache">—</span>
+          <button class="key" id="set-cache-clear" type="button" title="清空分离缓存（再次处理同一原曲需重新分离）" aria-label="清空分离缓存" disabled><svg class="i"><use href="#i-trash"/></svg></button></div>
+        <div class="set-row set-col">
+          <div class="set-line"><svg class="i"><use href="#i-plugin"/></svg><span class="set-label">VST3 插件</span><span class="set-desc">仅载入与保存设置，当前不参与音频处理</span>
+            <button class="key" id="vst-add-file" type="button" title="添加 .vst3 文件" aria-label="添加 VST3 文件"><svg class="i"><use href="#i-plus"/></svg></button>
+            <button class="key" id="vst-add-folder" type="button" title="添加 .vst3 文件夹" aria-label="添加 VST3 文件夹"><svg class="i"><use href="#i-folder-plus"/></svg></button></div>
+          <ul class="vst-list" id="vst-list" aria-label="已添加的 VST3 插件"></ul>
+          <p class="set-status" id="vst-status" role="status"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 循环区间精确编辑 -->
+  <div class="modal" id="loop-editor" role="dialog" aria-modal="true" aria-labelledby="loop-title" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <form class="modal-box modal-narrow" id="loop-form">
+      <div class="modal-head"><svg class="i"><use href="#i-loop"/></svg><span class="modal-title" id="loop-title">循环区间</span>
+        <button class="key key-flat" type="button" data-close title="取消" aria-label="取消"><svg class="i"><use href="#i-close"/></svg></button></div>
+      <div class="modal-body loop-fields">
+        <label>起点<input id="loop-a" required spellcheck="false" aria-label="循环起点，分:秒"></label>
+        <label>终点<input id="loop-b" required spellcheck="false" aria-label="循环终点，分:秒"></label>
+        <p class="field-error" id="loop-error" role="alert"></p>
+      </div>
+      <div class="modal-foot"><button class="key key-primary" type="submit" title="应用循环" aria-label="应用循环"><svg class="i"><use href="#i-check"/></svg></button></div>
+    </form>
+  </div>
+</div>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script src="report.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

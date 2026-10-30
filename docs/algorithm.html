@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATUNE 是怎么修音的</title>
+<style>
+*{box-sizing:border-box;border-radius:0}
+:root{--base:#fffafb;--surface:#fff1f6;--field:#fff;--text:#261e2a;--muted:#655563;--line:#ecd1dc;--accent:#b52f68}
+body{margin:0;background:var(--base);color:var(--text);font:17px/1.8 "Microsoft YaHei UI","PingFang SC",system-ui,sans-serif}
+main{max-width:920px;margin:0 auto;padding:40px 24px 72px}
+header{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:32px}
+h1{font:700 30px/1.3 "Microsoft YaHei UI",sans-serif;margin:0 0 8px}
+.lead{color:var(--muted);margin:0}
+h2{font-size:21px;margin:48px 0 16px;display:flex;gap:12px;align-items:baseline}
+h2 .idx{color:var(--accent);font:700 15px Consolas,monospace}
+p{margin:0 0 12px}
+.tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.tile{background:var(--surface);border:1px solid var(--line);padding:18px 20px}
+.tile .label{color:var(--muted);font-size:15px}
+.tile .value{font-size:34px;font-weight:700;line-height:1.3}
+.tile .hint{color:var(--muted);font-size:14px}
+/* 步骤 + 耗时条（条形按 30 秒满格） */
+.steps{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.step{display:grid;grid-template-columns:40px minmax(0,1fr) 260px;gap:8px 20px;padding:18px 0;border-bottom:1px solid var(--line);outline:0}
+.step .n{color:var(--accent);font:700 20px/1.4 Consolas,monospace}
+.step h3{font-size:18px;margin:0 0 4px}
+.step p{margin:0;font-size:16px}
+.time{align-self:start;padding-top:4px;position:relative}
+.time .sec{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
+.track{height:10px;background:var(--line);margin-top:6px}
+.bar{height:10px;background:var(--accent)}
+.tip{position:absolute;right:0;top:100%;margin-top:6px;z-index:2;background:var(--text);color:#fff;font-size:14px;line-height:1.5;padding:6px 10px;white-space:nowrap;opacity:0;transform:translateY(-4px);transition:opacity .15s,transform .15s;pointer-events:none}
+.step:hover .tip,.step:focus-visible .tip{opacity:1;transform:none}
+.step:focus-visible{background:var(--surface)}
+.scale{display:grid;grid-template-columns:40px minmax(0,1fr) 260px;gap:0 20px;color:var(--muted);font-size:13px;padding-top:6px}
+.scale .ticks{grid-column:3;position:relative;height:20px}
+.scale .ticks span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.scale .ticks span:first-child{transform:none}.scale .ticks span:last-child{transform:translateX(-100%)}
+.points{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.point{background:var(--surface);border:1px solid var(--line);padding:18px 20px}
+.point h3{font-size:17px;margin:0 0 6px}
+.point p{margin:0;font-size:16px}
+table{width:100%;border-collapse:collapse;background:var(--field);font-size:16px}
+th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.note{color:var(--muted);font-size:14px;margin-top:12px}
+footer{margin-top:56px;border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:14px}
+@media (prefers-reduced-motion:reduce){.tip{transition:none}}
+@media (max-width:720px){.step,.scale{grid-template-columns:32px minmax(0,1fr)}.time,.scale .ticks{grid-column:2}.tiles,.points{grid-template-columns:1fr}}
+</style>
+<main>
+<header>
+  <h1>ATUNE 是怎么修音的</h1>
+  <p class="lead">你给它两样东西：<b>原曲</b>（带原唱和伴奏的歌）和<b>你自己唱的干音</b>。它会参照原唱，把你唱得不准的音调准、把节奏对齐，再配上伴奏混成一首完整的歌。整个过程都在你自己的电脑上完成，不会上传。</p>
+</header>
+
+<h2><span class="idx">01</span>要花多久</h2>
+<div class="tiles">
+  <div class="tile"><div class="label">第一次处理一首歌</div><div class="value">约 1 分钟</div><div class="hint">需要先把原曲拆成人声和伴奏</div></div>
+  <div class="tile"><div class="label">同一首歌再处理</div><div class="value">约 50 秒</div><div class="hint">拆好的人声和伴奏会被记住，直接复用</div></div>
+</div>
+<p class="note">以下耗时是旧版以 3 分 57 秒的《青花瓷》在本机实测的记录；加入字句识别后处理时间会变化。电脑配置不同，速度也会有差别。</p>
+
+<h2><span class="idx">02</span>每一步在做什么</h2>
+<p>一共 8 步，按顺序自动完成。右侧是第一次处理时每一步的耗时；鼠标移到某一步上，可以看到再处理时的耗时。</p>
+<ol class="steps">
+  <li class="step" tabindex="0"><span class="n">1</span><div><h3>读取音频</h3><p>把你选的两个文件打开，转换成程序能处理的统一格式。</p></div>
+    <div class="time"><div class="sec">1.1 秒</div><div class="track"><div class="bar" style="width:3.7%"></div></div><div class="tip">再处理时 0.3 秒</div></div></li>
+  <li class="step" tabindex="0"><span class="n">2</span><div><h3>把原曲拆成人声和伴奏</h3><p>用 AI 把原曲里的原唱和伴奏分开。原唱用来当“标准答案”，伴奏留着最后配给你的声音。</p></div>
+    <div class="time"><div class="sec">9.4 秒</div><div class="track"><div class="bar" style="width:31.3%"></div></div><div class="tip">再处理时 1.5 秒（直接读取上次拆好的结果）</div></div></li>
+  <li class="step" tabindex="0"><span class="n">3</span><div><h3>听出两边的音高</h3><p>逐个瞬间判断你和原唱各自唱的是什么音，每秒判断 100 次。</p></div>
+    <div class="time"><div class="sec">1.7 秒</div><div class="track"><div class="bar" style="width:5.7%"></div></div><div class="tip">再处理时 1.7 秒</div></div></li>
+  <li class="step" tabindex="0"><span class="n">4</span><div><h3>保守对齐节奏</h3><p>始终保留你唱词的原始顺序。只有字句、声学和时间位置共同支持时，才小幅调整；不确定的位置保留原位置和速度，不切断连续人声。局部调整最多 150 毫秒，默认伸缩不超过 10%；不能保证每个字都贴齐。</p></div>
+    <div class="time"><div class="sec">29.6 秒</div><div class="track"><div class="bar" style="width:98.7%"></div></div><div class="tip">再处理时 26.9 秒 · 最耗时的一步</div></div></li>
+  <li class="step" tabindex="0"><span class="n">5</span><div><h3>核对可参考的音高</h3><p>只在对应可靠的位置参考原唱音高；没有匹配把握的区域保持原来的唱法，避免跟错字句修音。</p></div>
+    <div class="time"><div class="sec">0.3 秒</div><div class="track"><div class="bar" style="width:1%"></div></div><div class="tip">再处理时 0.2 秒</div></div></li>
+  <li class="step" tabindex="0"><span class="n">6</span><div><h3>修正音高</h3><p>算出每个音要调高或调低多少，然后直接在你的原声上调整。只把每个音的“中心”调准，你自己的颤音、滑音会保留；也不会把你强行拉到原唱的高度——男声唱女歌依然是你自己的音区。</p></div>
+    <div class="time"><div class="sec">2.9 秒</div><div class="track"><div class="bar" style="width:9.7%"></div></div><div class="tip">再处理时 2.9 秒</div></div></li>
+  <li class="step" tabindex="0"><span class="n">7</span><div><h3>混音出成品</h3><p>给人声做常见的美化：调整音色、让音量更稳、加一点空间感；人声出现时稍微压低伴奏，让人声更清楚。最后把整首歌的音量调到合适的水平，保证不爆音。</p></div>
+    <div class="time"><div class="sec">8.4 秒</div><div class="track"><div class="bar" style="width:28%"></div></div><div class="tip">再处理时 8.4 秒</div></div></li>
+  <li class="step" tabindex="0"><span class="n">8</span><div><h3>准备对比试听</h3><p>另外做一版“修音前”（你的原声配同一伴奏），并把两版音量调到一致，方便你在同一位置来回切换比较。</p></div>
+    <div class="time"><div class="sec">7.6 秒</div><div class="track"><div class="bar" style="width:25.3%"></div></div><div class="tip">再处理时 7.6 秒</div></div></li>
+</ol>
+<div class="scale" aria-hidden="true"><span></span><span></span><div class="ticks"><span style="left:0">0</span><span style="left:33.3%">10 秒</span><span style="left:66.7%">20 秒</span><span style="left:100%">30 秒</span></div></div>
+
+<h2><span class="idx">03</span>为什么听起来更自然</h2>
+<div class="points">
+  <div class="point"><h3>在你的原声上直接调</h3><p>不把你的声音交给 AI 重新“合成”一遍，而是在原本的录音上微调音高。呼吸声、咬字和音色都还是你自己的，电子味明显更少。</p></div>
+  <div class="point"><h3>只修准，不抹掉个性</h3><p>只把每个音调到准的位置，颤音、滑音这些个人特点基本保留，也不会把原唱的小抖动搬到你身上。</p></div>
+  <div class="point"><h3>保留你的音区</h3><p>男生唱女生的歌、或者降了八度唱，都按你自己的音区来修，不会把你拉到原唱的高度。</p></div>
+  <div class="point"><h3>保守对齐节奏</h3><p>根据可靠的字句和声学线索小幅调整；不确定的位置保留原位置和速度，原声顺序不可变。</p></div>
+</div>
+
+<h2><span class="idx">04</span>可以调的设置</h2>
+<table>
+  <tr><th>设置</th><th>默认</th><th>说明</th></tr>
+  <tr><td>修音强度</td><td>75%</td><td>越高修得越准；0% 表示不修音高</td></tr>
+  <tr><td>节奏匹配</td><td>开</td><td>关掉后保持原始时间位置，不再自动猜测起点平移</td></tr>
+  <tr><td>混音</td><td>开</td><td>关掉后不做美化，只把人声和伴奏直接合在一起</td></tr>
+</table>
+
+<h2><span class="idx">05</span>需要知道的限制</h2>
+<table>
+  <tr><th>情况</th><th>可能的表现</th></tr>
+  <tr><td>漏唱、改了歌词或即兴发挥</td><td>程序会尝试跳过缺失字句并保护不确定片段，但识别和匹配仍可能出错</td></tr>
+  <tr><td>气声、特别高或特别低的音</td><td>程序可能听错音高，修出来偶尔会有轻微杂音</td></tr>
+  <tr><td>原曲拆分不干净</td><td>伴奏里残留的原唱会和你的声音叠在一起，听起来像合唱</td></tr>
+  <tr><td>原曲和你跟唱的版本不同</td><td>比如现场版和录音室版，对齐效果会变差</td></tr>
+</table>
+<p class="note">建议每次处理完都用“修音前 / 修音后”对比听一下再保存。</p>
+
+<h2><span class="idx">06</span>用到的开源工具</h2>
+<table>
+  <tr><th>工具</th><th>用在哪一步</th></tr>
+  <tr><td>MDX-Net（Kim Vocal 2 模型）</td><td>第 2 步，拆分人声和伴奏</td></tr>
+  <tr><td>FCPE</td><td>第 3 步，听出音高（第 4 步对齐后会再听一次）</td></tr>
+  <tr><td>Sync Toolbox</td><td>第 4 步，找出你和原唱的对应关系</td></tr>
+  <tr><td>Rubber Band</td><td>第 4 步，调整快慢而不改变音高</td></tr>
+  <tr><td>Praat</td><td>第 6 步，在原声上调整音高</td></tr>
+  <tr><td>FFmpeg</td><td>第 1、7、8 步，读取音频和测量音量</td></tr>
+</table>
+<p class="note">其中 Praat 和 Rubber Band 采用 GPL 开源协议：自己使用没有限制；如果要把这个程序发给别人，需要一并提供源代码。完整说明见程序目录里的 THIRD_PARTY.txt。</p>
+
+<footer>ATUNE 桌面版 v3 · 2026 年 10 月 · 耗时数据来自本机实测</footer>
+</main>
+</html>

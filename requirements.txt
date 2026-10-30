@@ -1,0 +1,13 @@
+numpy
+scipy
+soundfile
+librosa
+tqdm
+onnxruntime-directml
+audio-separator
+audioread
+openai-whisper==20250625
+tiktoken==0.14.0
+pypinyin==0.55.0
+pedalboard==0.9.26
+praat-parselmouth==0.4.7

@@ -1,0 +1,19 @@
+Use case: ui-mockup.
+Create a polished high fidelity visual design reference for ATUNE, a Windows desktop singing pitch correction application. A single straight-on flat app interface, entire interface visible, approximately 840 x 760 logical pixels, raster output around 1680 x 1520. This is a design proposal for approval, not marketing imagery. No external desktop, device frame or perspective.
+
+Art direction: understated professional audio plugin, precise Swiss grid, graphite surfaces, warm amber emphasis, restrained engineered detail. ALL corners are sharp 90 degrees, including fields, buttons, panels, slider handle, window. No rounding anywhere. Flat matte colors, crisp 1px dividers, clean spacious typography, no gloss, shadows, texture, skeuomorphic screws, glow, decorative waveform, meters or invented controls. Background #171a1e, modules #20242a, recessed fields #111418, text #eef0f2, secondary text #b0b7c1, rules #606b78, amber #edb45f. Fluent legible Chinese sans serif similar Microsoft YaHei; tabular monospaced numeric values. Very clear hierarchy and deliberate spacing. Desktop utility proportions, not a website.
+
+Composition and exact Chinese copy:
+24px outer margin, consistent 12px component gaps. Header: ATUNE large left, small subtitle “自动修音” below, right restrained text “保留人声音区”. Thin divider.
+First full-width region heading “输入与输出”. Three evenly spaced aligned rows, fixed left labels, shared field boundaries, same-width right action buttons.
+Row 1 label “原曲”, dark field “周杰伦-青花瓷.mp3”, button “选择文件”.
+Row 2 label “演唱干音”, dark field “青花瓷-干声.mp3”, button “选择文件”.
+Row 3 label “输出成品”, dark field “青花瓷_修音成品.wav”, button “保存位置”.
+
+Second region two adjacent modules on a common baseline, pitch occupies about 60%, mixing 40%.
+Left heading “修音强度”, prominent “75%” aligned to right. One horizontal professional fader with long straight track, slender rectangular amber handle at 75%, short evenly spaced tick marks and labels “0” “25” “50” “75” “100”. Comfortable keyboard/mouse control size. Below: “轻柔” at left and “明显” at right. Secondary explanation “保留演唱者音区，不强拉原唱八度”.
+Right heading “轻度混音”. A single rectangular amber enabled toggle-style button reading “混音 / 开启”. Below compact two-line fixed effect description “均衡 · 压缩 · 轻混响” and “伴奏避让 · 响度平衡”. These are explanatory text, not additional controls. Footnote “关闭混音仍会合并伴奏”.
+
+Bottom output area separated by fine divider. Main amber rectangle button “开始修音”, dark disabled secondary button “取消”. Beneath simple status text “文件已选择，可以开始修音。” Empty inactive progress track with no fabricated number. Next line disclosure label “显示处理记录” with tiny square/straight chevron, log collapsed. Bottom row disabled buttons “打开成品” and “打开目录”. No fake running status, processing elapsed time, meters, playback controls or decorative numbers. This is the ready-to-start fixture; no finished output yet.
+
+Maintain all content visibly readable without clipping. Match repetitive field/button sizes and typographic baselines rigorously. Large enough text for desktop Chinese readability; secondary copy never microprint. The look should feel like a refined professional audio tool, with a linear signal-flow reading order and rectangular hardware-inspired fader. Produce ONLY the single interface design image, no annotation board or multiple variants.

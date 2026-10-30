@@ -1,0 +1,57 @@
+ShadowVox 桌面版依赖与模型说明（原名 Atune）
+
+本地运行，无需上传音频。项目源码、构建配置 ShadowVox.spec 和测试脚本在本项目目录。
+
+模型与代码许可分别适用：
+- DeepFilterNet3 降噪模型：使用 deepfilternet-rs 0.1.1 所附 ONNX 权重及其 Rust 推理运行时。
+  上游推理代码采用 MIT / Apache-2.0；Python/Rust 封装包的元数据声明 MIT。
+  未找到对预训练权重本身的明确再分发授权，不能由代码许可推断模型权重许可。
+  上游待答复：https://github.com/Rikorose/DeepFilterNet/issues/712
+  https://github.com/Rikorose/DeepFilterNet ，https://github.com/di-osc/DeepFilterNet-rs
+- PC-NSF-HiFiGAN 权重：OpenVPI Team，CC BY-NC-SA 4.0，含非商业限制。
+  模型原始 NOTICE、STATEMENTS 已内置在 licenses/hifigan。
+  https://github.com/openvpi/vocoders/releases/tag/pc-nsf-hifigan-44.1k-hop512-128bin-2025.02
+- FCPE：音高提取模型；项目 https://github.com/CNChTu/FCPE （MIT）。
+- Kim Vocal 2：已有 UVR/MDX 人声分离模型。
+  来源 https://github.com/TRvlvr/model_repo ，参数来自 models/mdx_model_data.json。
+  不根据推理代码许可证推断模型权重可任意商用。
+- Whisper base：OpenAI，多语言语音识别，MIT；仅在本机用于字句对齐，不上传录音。
+  模型及源码 https://github.com/openai/whisper ；模型 SHA256 为
+  ed3a0b6b1c0edf879ad9b11b1af5a0e6ab5db9205f891f668f8b0e6c6326e34e。
+
+桌面与运行时：
+- PySide6 / Qt：LGPL-3.0 / GPL 许可选项，按具体组件声明适用；动态库原样打包。
+  源码 https://code.qt.io/cgit/pyside/pyside-setup.git/ ，https://code.qt.io/cgit/qt/
+- Qt WebEngine / Qt WebChannel（PySide6-Addons、PySide6-WebEngine 6.12）：界面由 QtWebEngine 渲染。Qt WebEngine 采用
+  LGPL-3.0 / GPL 许可选项，内含 Chromium，其各组件许可（BSD 等）随 Qt WebEngine 分发；动态库与 QtWebEngineProcess 原样打包，
+  包内 licenses/PySide6-Addons、licenses/PySide6-WebEngine 保留随包许可文件。源码 https://code.qt.io/cgit/qt/qtwebengine.git/
+- ONNX Runtime：MIT；https://github.com/microsoft/onnxruntime
+- Pedalboard：GPL-3.0；内置 Freeverb 混响用于音频处理，也用于载入 VST3 和打开原界面；载入的 VST3 不处理音频。
+  https://github.com/spotify/pedalboard ，原始 LICENSE 和 NOTICE 随包收集。
+- NumPy：BSD；https://github.com/numpy/numpy
+- SciPy：BSD；https://github.com/scipy/scipy
+- SoundFile：BSD，内含 libsndfile LGPL；https://github.com/bastibe/python-soundfile
+- sounddevice / PortAudio：MIT；用于本地 A/B 音频播放，原始许可随包收集。
+  https://github.com/spatialaudio/python-sounddevice ，https://github.com/PortAudio/portaudio
+- FFmpeg：本机 Gyan full build，原始 LICENSE 已内置，具体构建配置由 ffmpeg -version 查看。
+  源码 https://ffmpeg.org/download.html ，构建来源 https://www.gyan.dev/ffmpeg/builds/
+- Praat / Parselmouth：GPL-3.0；桌面版用其 TD-PSOLA 在原始人声上移调（默认渲染器）；混音增厚使用其低八度重合成和人声周期标记。
+  分发含该组件的 EXE 须遵守 GPL-3.0（提供对应源码）。https://github.com/YannickJadoul/Parselmouth
+- Rubber Band 4.0.0 官方命令行（含 libsndfile）：GPL-2.0-or-later；用于整句节奏对齐的变速。
+  以独立程序 bin/rubberband.exe 随附，COPYING 在 licenses/rubberband。https://breakfastquay.com/rubberband/
+- Sync Toolbox：MIT（International Audio Laboratories Erlangen）；对齐路径（MrMsDTW、色度/DLNCO 特征）。
+  精简复制于 shadowvox/vendor/synctoolbox，算法未改，LICENSE 在 licenses/synctoolbox。
+  https://github.com/meinardmueller/synctoolbox
+- numba / llvmlite：BSD-2-Clause（llvmlite 内含 LLVM，Apache-2.0 with LLVM exception）；对齐算法即时编译。
+  https://github.com/numba/numba ，https://github.com/numba/llvmlite
+- PyTorch：BSD 等多种许可证；用于本机 Whisper 推理，原始许可随包收集。https://github.com/pytorch/pytorch
+- tiktoken：MIT，Whisper 分词；https://github.com/openai/tiktoken
+- pypinyin：MIT，中文拼音匹配；https://github.com/mozillazg/python-pinyin
+- Python：PSF；https://www.python.org/downloads/source/
+- PyInstaller：GPL 加 bootloader 分发例外；https://github.com/pyinstaller/pyinstaller
+
+便携推理实现：MDX 采用模型所需的标准 STFT/ISTFT 与重叠相加；
+节奏对齐使用内置 Whisper、PyTorch 和 Numba，不打包 librosa。
+原 audio-separator 路径仅在源码环境选择其他分离模型时保留。
+
+当前交付是本地实验工具；没有将声码器权重标成允许商业使用的模型。
