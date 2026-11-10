@@ -7,6 +7,13 @@ if not getattr(sys,"frozen",False):
 
 
 def main():
+    if len(sys.argv)==3 and sys.argv[1] in ('--density-worker','--master-worker'):
+        from shadowvox.vst_worker import serve
+        if sys.argv[1] == '--density-worker':
+            from shadowvox.density import densify as render
+        else:
+            from shadowvox.mastering import finalize as render
+        return serve(Path(sys.argv[2]), render)
     # 冷启动离线验收：拒绝 Python 层外部连接；正常运行不启用该钩子。
     import os
     if os.environ.get('SHADOWVOX_OFFLINE_TEST') == '1':
@@ -44,7 +51,12 @@ def main():
             try:
                 run(request['dry'],request['song'],request['output'],work_dir=request.get('work'),
                     opts=Options(strength=request.get('strength',.75),pitch_mode='register',max_shift_cents=450,
-                                 mix_effects=request.get('mix_effects',True),renderer='psola',rhythm_mode='full',reuse_stems=request.get('reuse_stems',True)),log=log)
+                                 mix_effects=request.get('mix_effects',True),renderer='psola',rhythm_mode='full',
+                                 master_density=request.get('master_density'),
+                                 fixed_master=request.get('fixed_master',False),
+                                 dry_has_backing=request.get('dry_has_backing',False),
+                                 mute_reference_gaps=request.get('mute_reference_gaps',False),
+                                 reuse_stems=request.get('reuse_stems',True)),log=log)
             except Exception:
                 import traceback
                 log(traceback.format_exc());return 1

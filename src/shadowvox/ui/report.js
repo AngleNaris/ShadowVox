@@ -3,6 +3,7 @@
   'use strict';
   const C = { bg: '#100b13', text: '#fff6fb', before: '#a99fad', muted: '#b8a8bb', rule: '#55445a',
     line: '#392b3c', grid: '#2a1f2e', pink: '#ff4c9f', pale: '#f3b4d2' };
+  const themeColors = new Map(Object.entries(C).map(([key, hex]) => [hex, 'var(--rp-' + key + ', ' + hex + ')']));
   // 节号悬挂在页边，标题、说明和绘图区共用内容线；轴标签在内容线左侧的沟槽里右对齐。
   const G = { left: 48, right: 1032, content: 124, gutter: 112, columnEnd: 524, columnStart: 556,
     indent: 76, sections: [204, 604, 940], headingInset: 24 };
@@ -202,7 +203,7 @@
       meter('综合响度', output?.lufs, 'LUFS', -30, -6, targets?.lufs, 1290, before?.lufs) +
       meter('真峰值', output?.true_peak_dbtp, 'dBTP', -12, 0, targets?.peak, 1352, before?.true_peak_dbtp);
   }
-  function svg(data) {
+  function svg(data, themed = false) {
     const v = data?.visual || {}, output = data?.output, before = data?.before;
     const rawTitle = v.title || (data ? data.name : '你的声音'), glyphs = Array.from(rawTitle || '声音改造');
     const title = glyphs.slice(0, 17).join('') + (glyphs.length > 17 ? '…' : '');
@@ -223,7 +224,11 @@
     s += line(G.left, 1396, G.right, 1396, C.rule) +
       text(G.left, 1428, output ? `${num(output.seconds, 1)} s / ${num(output.sample_rate / 1000, 1)} kHz` : '生成成品后显示真实数据', F.tick, C.muted) +
       text(G.right, 1428, '实际音频分析 · SHADOWVOX', F.tick, C.muted, 'text-anchor="end"');
-    return s + '</g></svg>';
+    s += '</g></svg>';
+    return themed ? s.replace(/(fill|stroke)="(#[0-9a-f]{6})"/gi, (match, attr, hex) => {
+      const color = themeColors.get(hex);
+      return color ? attr + '="' + color + '"' : match;
+    }) : s;
   }
   async function png(data) {
     const image = new Image();

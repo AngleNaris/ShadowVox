@@ -1,5 +1,6 @@
 .venv/
 models/
+/plugins/
 work/
 out/
 tools/_selftest/

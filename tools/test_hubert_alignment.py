@@ -64,6 +64,38 @@ class HubertTests(unittest.TestCase):
         self.assertAlmostEqual(times[100],1.1)
         self.assertTrue(valid[100]);self.assertFalse(stats['applied'])
 
+    def test_consistent_phrases_allow_a_large_global_shift(self):
+        first = [word(text,1.+i*.3) for i,text in enumerate(('wo','ai','ni'))]
+        second = [word(text,4.+i*.3) for i,text in enumerate(('jin','tian','hao'))]
+        groups = []
+        for phrase in (first,second):
+            delayed = [word(w['text'],w['start']+.65) for w in phrase]
+            self.assertEqual(hfa.word_groups(delayed,phrase),[])
+            matched, = hfa.word_groups(delayed,phrase,-.65)
+            groups.append((0.,8.,matched))
+        self.assertEqual(hfa._confirmed_offset(groups[:1],-.65),0.)
+        self.assertAlmostEqual(hfa._confirmed_offset(groups,-.65),-.65)
+
+    def test_sub_grid_vowel_and_placement_have_distinct_coordinates(self):
+        source = np.array([0.,2.])
+        for offset in (-.6,.6):
+            pairs = np.array([[1.03,1.08,1.03+offset,1.10+offset]])
+            plan = dict(windows=[],dry_seconds=2.,ref_seconds=3.,offset=offset,pitch_pairs=pairs)
+            pieces,stats = hfa.plan_segments(plan,.5)
+            placement = max(0.,offset*.5)
+            self.assertAlmostEqual(stats['median_offset_seconds'],offset*.5)
+            x = np.arange(200,dtype=np.float32)
+            rendered,_ = render_segments(x,pieces,100)
+            origin = round(placement*100)
+            np.testing.assert_array_equal(rendered[origin:],x)
+            self.assertFalse(np.any(rendered[:origin]))
+            times,valid = pitch_mapping(pieces,plan,len(rendered))
+            frame = origin+105
+            self.assertTrue(valid[frame])
+            self.assertFalse(valid[origin+102])
+            self.assertFalse(valid[origin+109])
+            self.assertAlmostEqual(times[frame],1.03+offset+.028+max(0.,-offset*.5))
+
     def test_continuous_warp_renders_once_and_preview_uses_same_waveform(self):
         x=np.arange(200,dtype=np.float32)
         pieces=[dict(source=np.array([0.,1.,2.]),target=np.array([0.,1.05,2.]),

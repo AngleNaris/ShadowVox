@@ -253,14 +253,25 @@ def pitch_mapping(pieces, plan, frame_count, frame_rate=100., start_seconds=0.):
     output = np.concatenate([p['target'][:-1] for p in pieces] + [pieces[-1]['target'][-1:]])
     times = start_seconds + np.arange(frame_count) / frame_rate
     source_times = np.interp(times, output, source)
-    reference_shift = max(0., -plan['offset'])
-    reference_times = np.interp(source_times, plan['dry_t'], plan['ref_t']) + reference_shift
-    # 旧缓存没有独立证据时，沿用已经通过检查的声学证据，不能全轨放行。
-    evidence = plan.get('correspondence_trusted', plan['acoustic_trusted'])
-    cells = np.floor(source_times / KEY_SECONDS + 1e-8).astype(int)
-    valid = evidence[np.clip(cells, 0, len(evidence)-1)].copy()
+    reference_shift = pieces[0].get('reference_shift', max(0., -plan['offset']))
+    pairs = plan.get('pitch_pairs')
+    if pairs is not None:
+        if not len(pairs):
+            return np.zeros(frame_count), np.zeros(frame_count, dtype=bool)
+        starts, ends, ref_starts, ref_ends = pairs.T
+        index = np.searchsorted(starts,source_times,side='right')-1
+        valid = index >= 0
+        index = np.maximum(index,0)
+        valid &= source_times < ends[index]
+        progress = np.clip((source_times-starts[index])/(ends[index]-starts[index]),0.,1.)
+        reference_times = ref_starts[index] + progress*(ref_ends[index]-ref_starts[index]) + reference_shift
+    else:
+        reference_times = np.interp(source_times, plan['dry_t'], plan['ref_t']) + reference_shift
+        evidence = plan.get('correspondence_trusted', plan['acoustic_trusted'])
+        cells = np.floor(source_times / KEY_SECONDS + 1e-8).astype(int)
+        valid = evidence[np.clip(cells, 0, len(evidence)-1)].copy()
+        valid &= (source_times >= plan['dry_t'][0]) & (source_times <= plan['dry_t'][-1])
     valid &= (times >= output[0]) & (times < output[-1])
-    valid &= (source_times >= plan['dry_t'][0]) & (source_times <= plan['dry_t'][-1])
     valid &= (reference_times >= reference_shift) & (reference_times < plan['ref_seconds'] + reference_shift)
     return reference_times, valid
 
@@ -271,13 +282,15 @@ def render_segments(dry, pieces, sr, start=0, end=None):
     if pieces[0].get('continuous'):
         source = np.concatenate([p['source'][:-1] for p in pieces]+[pieces[-1]['source'][-1:]])
         target = np.concatenate([p['target'][:-1] for p in pieces]+[pieces[-1]['target'][-1:]])
+        origin = round(target[0]*sr)
+        target -= target[0]
         rendered = dry.copy() if np.max(abs(target-source)) < 1e-7 else stretch(dry,source,target,sr)
         if abs(len(rendered)-len(dry)) > 2:
             raise RuntimeError('中文对齐输出长度不符，已停止导出')
         rendered = np.pad(rendered,(0,max(0,len(dry)-len(rendered))),mode='edge')[:len(dry)]
         out = np.zeros(end-start,dtype=np.float32)
-        lo,hi = max(0,start),min(end,len(rendered))
-        if hi > lo: out[lo-start:hi-start] = rendered[lo:hi]
+        lo,hi = max(origin,start),min(end,origin+len(rendered))
+        if hi > lo: out[lo-start:hi-start] = rendered[lo-origin:hi-origin]
         return out, [(float(p['target'][0]),float(p['target'][-1])) for p in pieces if p['protected']]
     out = np.zeros(end - start, dtype=np.float32)
     protected = []
@@ -327,10 +340,10 @@ def render_segments(dry, pieces, sr, start=0, end=None):
 
 
 def align(dry, reference, sr, use_lyrics=True, log=print, strength=1., capture=None, max_rate=.10,
-          backend='legacy'):
+          backend='legacy', offset_hint=0.):
     if backend == 'hubertfa_zh':
         from .hubert_alignment import align as chinese_align
-        return chinese_align(dry,reference,sr,log,strength,capture,max_rate)
+        return chinese_align(dry,reference,sr,log,strength,capture,max_rate,offset_hint)
     c1, o1 = features(dry, sr)
     c2, o2 = features(reference, sr)
     dry_t, ref_t = _warping_path(c1, o1, c2, o2)

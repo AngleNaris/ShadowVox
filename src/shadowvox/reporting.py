@@ -121,6 +121,14 @@ def summary_rows(report, metrics):
         ('削波修复', '已应用' if declip.get('applied') else ('关闭' if declip.get('disabled') else '未检测到明显削波')),
         ('处理时间', _value(report.get('elapsed_seconds'), ' 秒')),
     ]
+    separation = report.get('dry_separation')
+    if separation:
+        status = '复用缓存' if separation.get('cache_hit') else '已分离'
+        rows.append(('干声伴奏分离', status if separation.get('enabled') else '关闭'))
+    gap = report.get('reference_gap_mute')
+    if gap:
+        duration = _value(gap.get('muted_seconds'), ' 秒')
+        rows.append(('原唱空档静音', duration if gap.get('enabled') else '关闭'))
     visual = metrics.get('visual', {})
     pitch, timing = visual.get('pitch', {}), visual.get('timing', {})
     measured = []
@@ -166,6 +174,7 @@ PARAM_LABELS = {
     'mix_deess': ('去齿', '%', 100), 'mix_reverb': ('混响', '%', 100),
     'mix_delay': ('延时', '%', 100), 'mix_duck': ('伴奏避让', '%', 100),
     'target_lufs': ('目标响度', ' LUFS', 1), 'true_peak_ceiling': ('真峰值上限', ' dBTP', 1),
+    'master_density': ('母带密度', '%', 100),
 }
 
 
@@ -173,7 +182,7 @@ def parameter_rows(report):
     options = report.get('options', {})
     rows = []
     for key, (label, unit, scale) in PARAM_LABELS.items():
-        if key in options:
+        if options.get(key) is not None:
             rows.append((label, _value(options[key] * scale, unit)))
     rows.append(('混音效果', '开启' if options.get('mix_effects') else '关闭'))
     return rows

@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ShadowVox</title>
+<link rel="icon" href="logo.png">
+<script src="theme.js"></script>
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="report.css">
 </head>
@@ -26,6 +28,8 @@
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
   <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 17V5l11-2v12"/><path d="M3 15h6v5H3zM14 13h6v5h-6z"/></symbol>
   <symbol id="i-mic" viewBox="0 0 24 24"><path d="M9 3h6v10H9zM5 11v1a7 7 0 0 0 14 0v-1M12 19v3M8 22h8"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 4 22 9l-10 5L2 9ZM2 14l10 5 10-5"/></symbol>
+  <symbol id="i-live" viewBox="0 0 24 24"><path d="m13 3-8 11h6l-1 7 9-11h-6z"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 5h7l2 3h9v11H3z"/></symbol>
   <symbol id="i-reveal" viewBox="0 0 24 24"><path d="M3 19V5h7l2 3h9v3M3 19h15l3-8H6z"/></symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 16v5h16v-5"/></symbol>
@@ -42,9 +46,7 @@
   <symbol id="i-folder-plus" viewBox="0 0 24 24"><path d="M3 5h7l2 3h9v11H3zM12 11v6M9 14h6"/></symbol>
   <symbol id="i-open" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
-  <symbol id="i-plugin" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M5 8h14v4a7 7 0 0 1-14 0zM12 19v3"/></symbol>
-  <symbol id="i-disk" viewBox="0 0 24 24"><path d="M3 4h18v16H3zM3 14h18M7 17h2"/></symbol>
-  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 3h9l9 9-9 9-9-9zM8 8h1"/></symbol>
+  <symbol id="i-batch" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16M9 3v18"/></symbol>
 </svg>
 
 <div class="studio">
@@ -87,11 +89,19 @@
           <button class="chip" id="in-song" type="button" data-kind="song" data-need="请先选择原曲" title="原曲（可拖入）" aria-label="原曲：未选择">
             <svg class="i"><use href="#i-music"/></svg><span class="chip-name"><span class="mq">原曲</span></span>
           </button>
-          <button class="chip" id="in-dry" type="button" data-kind="dry" data-need="请先选择演唱干音" title="演唱干音（可拖入）" aria-label="演唱干音：未选择">
-            <svg class="i"><use href="#i-mic"/></svg><span class="chip-name"><span class="mq">干音</span></span>
-          </button>
+          <div class="dry-input">
+            <button class="chip" id="in-dry" type="button" data-kind="dry" data-need="请先选择演唱干音" title="演唱干音（可拖入）" aria-label="演唱干音：未选择">
+              <svg class="i"><use href="#i-mic"/></svg><span class="chip-name"><span class="mq">干音</span></span>
+            </button>
+            <button class="key key-labeled dry-option" id="dry-has-backing" type="button" role="switch" aria-checked="false" title="演唱干音混有伴奏时，先分离人声再降噪" disabled>
+              <svg class="i" aria-hidden="true"><use href="#i-layers"/></svg><span>含伴奏</span>
+            </button>
+          </div>
         </div>
         <div class="monitor">
+          <button class="key key-labeled" id="live-preview" type="button" role="switch" aria-checked="true" title="调参后自动更新播放位置附近的草稿。关闭后可试听修音前和已保存的成品">
+            <svg class="i" aria-hidden="true"><use href="#i-live"/></svg><span>实时预览</span>
+          </button>
           <button class="key" id="p-delta" type="button" aria-pressed="false" title="差值监听：当前版本减去修音前，只听处理改变的部分" aria-label="差值监听" disabled><svg class="i"><use href="#i-delta"/></svg></button>
           <div class="knob knob-sm" id="p-volume" tabindex="0" role="slider" aria-label="监听音量，不影响导出" title="监听音量（不影响导出）" data-min="0" data-max="100" data-step="5" data-default="100"><span class="knob-tick" aria-hidden="true"></span></div>
           <div class="meter" id="p-meter" aria-hidden="true"><i></i><i></i></div>
@@ -112,13 +122,14 @@
       <div id="ver-menu" class="menu" popover="auto" role="listbox" aria-label="成品版本"></div>
     </section>
 
-    <!-- 效果器：输出目录 + 预设，2×2 参数面板（由 app.js 按参数表生成） -->
+    <!-- 输出目录、预设和声音处理。 -->
     <div class="pane" id="pane-process">
       <section class="deck rise" style="--d:80ms" aria-label="输出与预设">
         <button class="out-card" id="out-card" type="button" data-need="请先选择输出目录" title="输出目录：每次生成自动保存为新版本（可拖入文件夹）" aria-label="输出目录：未选择">
           <svg class="i"><use href="#i-folder"/></svg><span class="out-path" id="out-path"><bdi>选择输出目录</bdi></span>
         </button>
         <div class="presets" id="presets" role="group" aria-label="参数预设：左键空槽保存，左键已存槽应用；右键已存槽进入待确认，再右键删除、左键覆盖" title="左键空槽 = 保存当前参数；左键已存槽 = 应用；右键已存槽 = 待确认（再右键删除、左键覆盖，4 秒自动取消）"></div>
+        <button class="key key-labeled" id="btn-batch" type="button" aria-haspopup="dialog"><svg class="i" aria-hidden="true"><use href="#i-batch"/></svg><span id="batch-button-label">批处理</span></button>
       </section>
       <section class="racks" id="racks" aria-label="处理参数"></section>
     </div>
@@ -177,19 +188,59 @@
     <div class="modal-backdrop" data-close></div>
     <div class="modal-box modal-wide">
       <div class="modal-head"><img class="brand-mark" src="logo.png" alt="" aria-hidden="true"><span class="modal-title" id="settings-title">设置</span>
-        <button class="key key-flat" type="button" data-close title="关闭" aria-label="关闭设置"><svg class="i"><use href="#i-close"/></svg></button></div>
+        <button class="key key-flat" type="button" data-close data-initial-focus title="关闭" aria-label="关闭设置"><svg class="i"><use href="#i-close"/></svg></button></div>
       <div class="modal-body set-body">
-        <div class="set-row"><svg class="i"><use href="#i-tag"/></svg><span class="set-label">版本</span><span class="set-value" id="set-version">—</span></div>
-        <div class="set-row"><svg class="i"><use href="#i-disk"/></svg><span class="set-label">分离缓存</span><span class="set-value" id="set-cache">—</span>
+        <div class="set-row"><span class="set-label">版本</span><span class="set-value" id="set-version">—</span></div>
+        <div class="set-row"><span class="set-label">作者</span><span class="set-value set-author" id="set-author">—</span></div>
+        <div class="set-row set-col">
+          <div class="set-line"><span class="set-label">软件更新</span><span class="set-desc" id="update-status" role="status">从 GitHub 检查正式版本</span></div>
+          <div class="set-line">
+            <button class="key key-labeled" id="check-update" type="button"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>检查更新</button>
+            <button class="key key-labeled" id="open-update" type="button" hidden><svg class="i" aria-hidden="true"><use href="#i-open"/></svg>打开发布页</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <span class="set-label">外观</span>
+          <div class="theme-modes" role="group" aria-label="外观模式">
+            <button class="key key-labeled" type="button" data-scheme-choice="light" aria-pressed="true">浅色</button>
+            <button class="key key-labeled" type="button" data-scheme-choice="dark" aria-pressed="false">深色</button>
+          </div>
+        </div>
+        <div class="set-row set-col">
+          <span class="set-label">主题色</span>
+          <div class="theme-swatches" id="theme-swatches" role="group" aria-label="主题色">
+            <label class="key key-labeled theme-custom"><input id="theme-custom" type="color" aria-label="自定义主题色">自定义</label>
+          </div>
+        </div>
+        <div class="set-row"><span class="set-label">分离缓存</span><span class="set-value" id="set-cache">—</span>
           <button class="key" id="set-cache-clear" type="button" title="清空分离缓存（再次处理同一原曲需重新分离）" aria-label="清空分离缓存" disabled><svg class="i"><use href="#i-trash"/></svg></button></div>
         <div class="set-row set-col">
-          <div class="set-line"><svg class="i"><use href="#i-plugin"/></svg><span class="set-label">VST3 插件</span><span class="set-desc">仅载入与保存设置，当前不参与音频处理</span>
+          <div class="set-line"><span class="set-label">VST3 插件</span><span class="set-desc">仅载入与保存设置，当前不参与音频处理</span>
             <button class="key" id="vst-add-file" type="button" title="添加 .vst3 文件" aria-label="添加 VST3 文件"><svg class="i"><use href="#i-plus"/></svg></button>
             <button class="key" id="vst-add-folder" type="button" title="添加 .vst3 文件夹" aria-label="添加 VST3 文件夹"><svg class="i"><use href="#i-folder-plus"/></svg></button></div>
           <ul class="vst-list" id="vst-list" aria-label="已添加的 VST3 插件"></ul>
           <p class="set-status" id="vst-status" role="status"></p>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="modal" id="batch-dialog" role="dialog" aria-modal="true" aria-labelledby="batch-title" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-box modal-wide batch-box">
+      <div class="modal-head"><svg class="i"><use href="#i-batch"/></svg><span class="modal-title" id="batch-title">批处理队列</span>
+        <button class="key key-flat" type="button" data-close title="关闭队列" aria-label="关闭队列"><svg class="i"><use href="#i-close"/></svg></button></div>
+      <div class="modal-body batch-body">
+        <div class="set-line">
+          <button class="key key-labeled" id="batch-add" type="button" data-initial-focus><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg>添加干音</button>
+          <button class="key key-labeled" id="batch-reference" type="button">统一原曲</button>
+          <button class="key key-labeled" id="batch-clear" type="button">清空</button>
+        </div>
+        <p class="set-status">可以多选或拖入干音。每条任务可更换原曲，处理参数和输出目录取自工作台。</p>
+        <ul class="batch-list" id="batch-list" aria-label="待处理文件"></ul>
+        <p class="set-status" id="batch-status" role="status"></p>
+      </div>
+      <div class="modal-foot"><button class="key key-labeled key-primary" id="batch-start" type="button">开始批处理</button></div>
     </div>
   </div>
 

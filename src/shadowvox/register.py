@@ -36,18 +36,20 @@ def fold_register(dry, reference, voiced):
     return target, reliable, octave
 
 
-def register_shift(dry, reference, voiced, strength, max_shift_cents=450):
+def register_shift(dry, reference, voiced, strength, max_shift_cents=450, detail=0.):
     target, reliable, octave = fold_register(dry, reference, voiced)
     shift = np.zeros(len(dry), dtype=np.float64)
+    detail = float(np.clip(detail,0.,1.))
+    first, second = 11-2*round(2*detail), 15-2*round(3*detail)
     for start, end in runs(reliable):
-        if end-start < 10:
+        if end-start < round(10-4*detail):
             continue
         difference = target[start:end]-dry[start:end]
         # 110ms→150ms 中值级联压掉两轨颤音的差异，保留音符跳变台阶，再 50ms 过渡：
         # 主要修音高中心，演唱者颤音/滑音大部分留在源曲线，少移植原唱抖动。
         # 代价：短于约 80ms 的音及换音时机差不单独修正，时机交给节奏模块。
-        delta = median_filter(median_filter(difference, size=11, mode="nearest"),
-                              size=15, mode="nearest")
+        delta = median_filter(median_filter(difference, size=first, mode="nearest"),
+                              size=second, mode="nearest")
         delta = uniform_filter1d(delta, size=5, mode="nearest")
         deviation = median_filter(np.abs(difference-delta), size=21, mode="nearest")
         confidence = np.clip((160-deviation)/100, 0, 1)

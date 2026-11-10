@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT/'src'))
 import os
 os.environ['SHADOWVOX_WINDOW'] = '980x740'
 from PySide6.QtCore import QEvent, QEventLoop, QPoint, QPointF, QSettings, Qt, QTimer
-from PySide6.QtGui import QMouseEvent, QWheelEvent
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -27,7 +27,8 @@ OUT = ROOT/'out/releases'/__version__/'workflow'
 
 def contrast_checks():
     css = (ROOT/'src/shadowvox/ui/style.css').read_text(encoding='utf-8')
-    tokens = dict(re.findall(r'--([a-z-]+):\s*(#[0-9a-f]{6})', css))
+    root = css.split(':root {', 1)[1].split('}', 1)[0]
+    tokens = dict(re.findall(r'--([a-z-]+):\s*(#[0-9a-f]{6})', root))
     def lum(value):
         rgb = [int(value[i:i+2], 16)/255 for i in (1, 3, 5)]
         rgb = [v/12.92 if v <= .04045 else ((v+.055)/1.055)**2.4 for v in rgb]
@@ -77,8 +78,18 @@ class Harness:
         r = self.jsj(f"(() => {{ const r = document.querySelector({json.dumps(selector)}).getBoundingClientRect(); return [r.left + r.width/2, r.top + r.height/2]; }})()")
         return QPoint(round(r[0]), round(r[1]))
 
+    def reveal(self, selector, block='nearest'):
+        self.js(f"document.querySelector({json.dumps(selector)}).scrollIntoView({{block:{json.dumps(block)}}}); 1")
+        self.wait(100)
+
     def click(self, selector, button=Qt.LeftButton):
+        self.reveal(selector)
         QTest.mouseClick(self.target, button, Qt.NoModifier, self.center(selector)); self.wait(120)
+
+    def move(self, point, buttons=Qt.NoButton):
+        local, global_pos = QPointF(point), QPointF(self.target.mapToGlobal(point))
+        self.app.sendEvent(self.target, QMouseEvent(QEvent.MouseMove, local, global_pos, Qt.NoButton, buttons, Qt.NoModifier))
+        self.wait(70)
 
     def dclick(self, point):
         # WebEngine 需要真实的 Press/Release/DblClick/Release 序列才识别为双击
@@ -101,34 +112,52 @@ def check_gui():
     h = Harness(); w = h.window
     h.js("localStorage.clear(); 1"); w.view.reload(); h.wait(1500); h.target = w.view.focusProxy()
     js = h.js
+    assert js("document.querySelector('#dry-has-backing').disabled")
 
-    # 旋钮：方向键、双击复位、上下拖动（约 200px 走满）、滚轮
-    h.js("document.querySelector('.cell[data-key=strength] .knob-wrap').focus(); 1")
-    h.key(Qt.Key_Left); assert js('P.strength') == 74
-    knob = h.center('.cell[data-key=strength] .knob-wrap')
-    h.dclick(knob); assert js('P.strength') == 75
-    QTest.mousePress(h.target, Qt.LeftButton, Qt.NoModifier, knob)
-    for dy in range(2, 22, 2): QTest.mouseMove(h.target, knob - QPoint(0, dy)); h.wait(15)
-    QTest.mouseRelease(h.target, Qt.LeftButton, Qt.NoModifier, knob - QPoint(0, 20)); h.wait(80)
-    assert js('P.strength') == 85, js('P.strength')
-    wheel = QWheelEvent(QPointF(knob), QPointF(w.view.mapToGlobal(knob)), QPoint(), QPoint(0, 120),
-                        Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
-    h.app.sendEvent(h.target, wheel); h.wait(100); assert js('P.strength') == 86
-    h.dclick(knob)
-    assert js("localStorage.getItem('sv_param_strength')") == '75'
+    # 双轴：键盘微调、悬停读数、斜拖同时调整、双击复位。
+    field = '.xy-field[data-x=correction]'
+    point = field + ' .xy-point'
+    h.reveal(field, 'center')
+    h.move(QPoint(4, 4))
+    assert js("getComputedStyle(document.querySelector('.xy-tip')).visibility === 'hidden'")
+    h.move(h.center(point))
+    assert js("getComputedStyle(document.querySelector('.xy-tip')).visibility === 'visible'")
+    h.js("document.querySelector('#sound-correction').focus(); 1")
+    h.key(Qt.Key_Left); assert js('P.correction') == 49
+    h.dclick(h.center(point)); assert js('P.correction') == 50
+    start = h.center(point)
+    distance = round(js("document.querySelector('.xy-scale').getBoundingClientRect().width") * .15)
+    QTest.mousePress(h.target, Qt.LeftButton, Qt.NoModifier, start)
+    for n in range(1, 5):
+        shift = round(distance * n / 4)
+        h.move(start + QPoint(shift, -shift), Qt.LeftButton)
+    QTest.mouseRelease(h.target, Qt.LeftButton, Qt.NoModifier, start + QPoint(distance, -distance)); h.wait(100)
+    assert all(64 <= value <= 66 for value in h.jsj('[P.correction, P.beauty]'))
+    h.dclick(h.center(point))
+    assert js("localStorage.getItem('sv_param_correction')") == '50'
+    assert js('P.beauty') == 50
+    h.reveal('#sound-mixdown')
+    h.js("document.querySelector('#sound-mixdown').focus(); 1"); h.key(Qt.Key_Left)
+    assert js('P.mixdown') == 99
+    h.dclick(h.center('#sound-mixdown')); assert js('P.mixdown') == 100
 
-    # 开关：混音旁路使整块变淡并锁住，开关本身仍可点；降噪电源锁住旋钮
+    # 旁路只锁两块面板的纵轴及混音推子。
     h.click('[data-switch=mix_effects]')
-    assert js("document.querySelector('[data-rack=mix] .rack-body').inert && document.querySelector('.cell[data-key=target_lufs]').inert")
+    assert js("document.querySelector('#sound-fusion').disabled && document.querySelector('#sound-mixdown').disabled")
     h.shot('mix-bypassed')
-    h.click('[data-switch=mix_effects]'); assert js('SW.mix_effects && !document.querySelector("[data-rack=mix] .rack-body").inert')
-    h.click('[data-switch=denoise]'); assert js("!SW.denoise && document.querySelector('.cell[data-key=denoise_strength] .knob-wrap').inert")
-    h.click('[data-switch=denoise]'); assert js('SW.denoise')
-
+    h.click('[data-switch=mix_effects]'); assert js('SW.mix_effects && !document.querySelector("#sound-fusion").disabled')
     # 预设：左键空槽保存；改参数后左键应用；右键待确认，再右键删除
-    h.click('.pad[data-slot="3"]'); assert js("JSON.parse(localStorage.getItem('sv_presets'))['3'].params.strength") == 75
-    js("document.querySelector('.cell[data-key=mix_eq] .knob-wrap').focus(); 1"); h.key(Qt.Key_Up); assert js('P.mix_eq') == 105
-    h.click('.pad[data-slot="3"]'); assert js('P.mix_eq') == 100
+    h.click('.pad[data-slot="3"]'); assert js("JSON.parse(localStorage.getItem('sv_presets'))['3'].params.correction") == 50
+    js("document.querySelector('#sound-beauty').focus(); 1"); h.key(Qt.Key_Up); assert js('P.beauty') == 51
+    h.click('.pad[data-slot="3"]'); assert js('P.beauty') == 50
+    js("presets[9] = {params:{strength:62,target_lufs:-21},switches:{denoise:false,mix_effects:true}}; renderPresets(); 1")
+    h.click('.pad[data-slot="9"]')
+    assert js("params().strength === 62 && params().denoise === false && hasLegacy('correction')")
+    js("document.querySelector('#sound-correction').focus(); 1")
+    h.key(Qt.Key_Right)
+    assert js("!('strength' in params()) && !('target_lufs' in params())")
+    h.click('.pad[data-slot="3"]')
+    assert js("!('target_lufs' in params()) && P.correction === 50")
     h.click('.pad[data-slot="3"]', Qt.RightButton); assert js("document.querySelector('.pad[data-slot=\"3\"]').dataset.armed") == 'true'
     h.shot('preset-armed')
     h.click('.pad[data-slot="3"]', Qt.RightButton); assert js("!JSON.parse(localStorage.getItem('sv_presets'))['3']")
@@ -140,17 +169,20 @@ def check_gui():
     layout = {}
     for width, height in ((720, 600), (840, 700), (980, 740), (1080, 780)):
         w.resize(width, height); h.wait(400)
+        h.js("document.querySelector('#content').scrollTop = 0; 1")
         m = h.jsj("""(() => { const c = document.querySelector('#content'), a = document.querySelector('#in-song').getBoundingClientRect(),
-            b = document.querySelector('#in-dry').getBoundingClientRect();
+            b = document.querySelector('.dry-input').getBoundingClientRect();
             return { overflow: c.scrollWidth - c.clientWidth, chipDw: Math.abs(a.width - b.width), chipDy: Math.abs(a.top - b.top),
-                     racks: [...document.querySelectorAll('.rack')].map(r => Math.round(r.getBoundingClientRect().width)) }; })()""")
-        assert m['overflow'] <= 0 and m['chipDw'] <= 1 and m['chipDy'] <= 1, (width, m)
+            switchFits: document.querySelector('#live-preview').getBoundingClientRect().right <
+              document.querySelector('#p-meter').getBoundingClientRect().left,
+            racks: [...document.querySelectorAll('.rack')].map(r => Math.round(r.getBoundingClientRect().width)) }; })()""")
+        assert m['overflow'] <= 0 and m['chipDw'] <= 1 and m['chipDy'] <= 1 and m['switchFits'], (width, m)
         layout[width] = m; h.shot(f'empty-{width}')
     evidence['layout'] = layout
     w.resize(980, 740); h.wait(300)
 
     # 整曲处理：自动保存 V1，报告与播放器就绪
-    folder = Path(tempfile.mkdtemp(prefix='shadowvox-gui-'))
+    folder = Path(tempfile.mkdtemp(prefix='shadowvox-gui-', dir=OUT))
     selftest = ROOT/'tools/_selftest'
     # 拖放：音频落在原曲 / 干音框，文件夹落在输出目录（路径由 Qt 层取得后按落点分配）
     for selector, path in (('#in-song', selftest/'song.wav'), ('#in-dry', selftest/'dry.wav'), ('#out-card', folder)):
@@ -159,13 +191,21 @@ def check_gui():
     h.until("inputs.song && inputs.dry && localStorage.getItem('sv_output')", 10)
     assert js("document.querySelector('#in-dry .mq').textContent") == 'dry.wav'
     assert Path(json.loads(js("localStorage.getItem('sv_output')"))) == folder
+    assert js("!document.querySelector('#dry-has-backing').disabled && !params().dry_has_backing")
+    js("document.querySelector('#dry-has-backing').focus(); 1"); h.key(Qt.Key_Space)
+    assert js('params().dry_has_backing')
+    h.key(Qt.Key_Space); assert js('!params().dry_has_backing')
     started = time.monotonic(); h.click('#go')
     h.until('run.busy', 10); h.wait(2500); h.shot('processing')
     assert js("document.querySelector('#racks').inert && document.querySelector('#go').classList.contains('running')")
+    assert js("document.querySelector('.dry-option').inert")
     h.until('state.ready && !run.busy && !run.settling')
     evidence['first_run_seconds'] = round(time.monotonic()-started, 1)
     assert (folder/'dry_V1.wav').is_file() and (folder/'dry_V1.report.html').is_file()
     report = json.loads((folder/'dry_V1.report.json').read_text(encoding='utf-8'))
+    assert report['mixing']['density']['applied']
+    assert report['mixing']['engine'] == 'C+' and report['mixing']['readback_verified']
+    assert report['mixing']['measured_output_true_peak_dbtp'] <= -.5
     assert report['output'] == str(folder/'dry_V1.wav') and 'vocal_stem' not in report and report['audio_analysis']['output']['lufs'] is not None
     assert js("document.querySelectorAll('#rp-summary dt').length") >= 7
     h.shot('done')
@@ -178,14 +218,38 @@ def check_gui():
     h.key(Qt.Key_Space); h.wait(150); assert not w.bridge.player.playing
 
     # 草稿：调整参数后自动切到草稿并在后台更新当前位置
-    js("document.querySelector('.cell[data-key=mix_reverb] .knob-wrap').focus(); 1"); h.key(Qt.Key_PageUp)
-    h.until("document.querySelector('#player').dataset.cache === 'ready'", 60)
+    draft_events = []
+    w.bridge.draftState.connect(lambda payload: draft_events.append(json.loads(payload)))
+    prior_fusion = js('P.fusion')
+    js("document.querySelector('#sound-fusion').focus(); 1"); h.key(Qt.Key_Up)
+    assert js('P.fusion') == prior_fusion + 1
+    h.until("['ready','error'].includes(document.querySelector('#player').dataset.cache)", 60)
+    assert draft_events and draft_events[-1]['state'] == 'ready', draft_events
     assert w.bridge.player.selected == 1 and w.bridge.draft_range[1] > w.bridge.draft_range[0]
     h.shot('draft-ready')
 
-    # 第二个版本：V2 保存，版本菜单可切回 V1，报告跟随
+    # 关闭预览后，编辑和跳转只更新参数及播放位置。再次启用才重新生成草稿。
+    h.js("document.querySelector('#live-preview').focus(); 1"); h.key(Qt.Key_Space)
+    h.until('state.sel === 2 && !switchOn(document.querySelector("#live-preview"))', 10)
+    assert not w.bridge.live_preview and js("document.querySelector('.src[data-src=\"1\"]').disabled")
+    assert js("localStorage.getItem('sv_live_preview')") == 'false'
+    revision = w.bridge.draft_revision
+    js("document.querySelector('#sound-fusion').focus(); 1"); h.key(Qt.Key_Up)
+    h.click('#p-start'); h.click('.src[data-src="0"]'); h.wait(400)
+    assert w.bridge.draft_revision == revision and not w.bridge.draft_timer.isActive()
+    assert w.bridge.draft_worker is None and draft_events[-1]['state'] == 'empty'
+    h.shot('preview-off-before')
+    h.click('.src[data-src="2"]'); h.until('state.sel === 2', 10); h.shot('preview-off-after')
+    h.click('#live-preview'); h.until("document.querySelector('#player').dataset.cache === 'ready'", 60)
+    assert w.bridge.live_preview and w.bridge.player.selected == 1
+
+    # 第二个版本：后期旁路仍走固定母带，版本菜单可切回 V1。
+    h.click('[data-switch=mix_effects]')
     h.click('#go'); h.until('run.busy', 10); h.until('state.ready && !run.busy && !run.settling && current === 2')
     assert (folder/'dry_V2.wav').is_file()
+    bypassed = json.loads((folder/'dry_V2.report.json').read_text(encoding='utf-8'))['mixing']
+    assert not bypassed['enabled'] and bypassed['engine'] == 'C+' and bypassed['readback_verified']
+    assert not bypassed['density']['applied'] and bypassed['measured_output_true_peak_dbtp'] <= -.5
     h.click('#p-ver-btn'); h.wait(300); h.shot('versions')
     h.click('#ver-menu .menu-item:last-child'); h.until('current === 1', 30)
     assert js("document.querySelector('#rp-title').textContent").startswith('V1')
@@ -196,6 +260,14 @@ def check_gui():
     h.click('#btn-settings'); h.wait(400); assert not js("document.querySelector('#settings').hidden")
     h.shot('settings'); h.key(Qt.Key_Escape); h.wait(300)
     assert js("document.querySelector('#settings').hidden && document.activeElement.id === 'btn-settings'")
+    h.click('#dry-has-backing')
+    h.until('!state.ready && params().dry_has_backing', 10)
+    assert w.bridge.preview_cache is None
+    changed_input = folder/'alternate-dry.wav'
+    changed_input.write_bytes((selftest/'dry.wav').read_bytes())
+    c = h.center('#in-dry')
+    w.bridge.filesDropped.emit(json.dumps(dict(paths=[str(changed_input)], x=c.x(), y=c.y())))
+    h.until("inputs.dry.endsWith('alternate-dry.wav') && !params().dry_has_backing", 10)
 
     evidence['passed'] = True
     (OUT/'result.json').write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding='utf-8')

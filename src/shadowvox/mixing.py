@@ -8,14 +8,17 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 from pedalboard import HighShelfFilter, LowShelfFilter, Reverb
+from scipy.ndimage import gaussian_filter1d
 from scipy.signal import butter, sosfilt, sosfiltfilt, lfilter, resample_poly, oaconvolve
 
-from . import audio, mix_balance, vocal_body
+from . import audio, mix_balance
 
 envelope = audio.envelope
 # 已选短房间 C、长尾 +3 dB 的固定返回量，不随每次渲染重新匹配湿声 RMS。
 SHORT_ROOM_RETURN_DB = -15.438630706242808
 LONG_ROOM_RETURN_DB = -1.3343912329744447 + 3.
+LOW_MID_DUCK_BAND_HZ = (150, 250)
+MIX_PRESET = "single_vocal_low_mid_duck"
 
 
 def bell(x, sr, frequency, gain_db, q):
@@ -131,7 +134,7 @@ def peak_compress(x, sr, amount=1.):
     return (x*gain).astype(np.float32), float(np.max(reduction)), threshold
 
 
-def warm_harmonics(x, sr):
+def warm_harmonics(x, sr, amount=1.):
     """4 倍过采样的中低频谐波；不改变共振峰。"""
     band = sosfiltfilt(butter(2,[100,min(1100,sr*.45)],btype="bandpass",fs=sr,output="sos"),x)
     level = max(3*audio.rms(band), .001)
@@ -139,7 +142,7 @@ def warm_harmonics(x, sr):
     harmonic = resample_poly(np.tanh(1.3*up)**2,1,4)[:len(x)]
     harmonic = sosfiltfilt(butter(3,[90,min(2600,sr*.45)],btype="bandpass",fs=sr,output="sos"),harmonic).astype(np.float32)
     target = audio.rms(x)
-    harmonic *= .18*target/max(audio.rms(harmonic),1e-9)
+    harmonic *= .18*amount*target/max(audio.rms(harmonic),1e-9)
     return audio.match_rms(x+harmonic,target,max_gain_db=6).astype(np.float32)
 
 
@@ -155,7 +158,41 @@ def early_reflections(x, sr):
     return out
 
 
-def _vocal_chain(vocal, sr, lowcut_hz, eq, compression, deessing, combined):
+def _vocal_tail(y, sr, target, eq, deessing, harmonics, smile):
+    low_hz = 160. + 60.*smile
+    high_hz = min(8000. - 2000.*smile, sr*.45)
+    low_db = 1.2*eq + 4.8*smile
+    high_db = 3.*eq + 6.*smile
+    if eq:
+        y = LowShelfFilter(cutoff_frequency_hz=low_hz, gain_db=low_db, q=.7071)(y,sr)
+        y = HighShelfFilter(cutoff_frequency_hz=high_hz, gain_db=high_db, q=.7071)(y,sr)
+    y = audio.match_rms(y,target,max_gain_db=6).astype(np.float32)
+    if harmonics:
+        y = warm_harmonics(y,sr,harmonics)
+    y, reduction = deess(y,sr,deessing)
+    return y, {"low_shelf_hz":low_hz,"low_shelf_gain_db":low_db,
+               "high_shelf_hz":high_hz,"high_shelf_gain_db":high_db,"max_deess_db":reduction}
+
+
+def _fill_thin_vocal(vocal, reference, sr, amount):
+    """用标准均衡的人声估计偏薄时刻，再对同一条人声补声体。"""
+    band = sosfiltfilt(butter(2,[150,350],btype="bandpass",fs=sr,output="sos"),reference)
+    hop = round(sr*.01)
+    level = 20*np.log10(_frame_envelope(reference,sr,hop,.065,.145))
+    contrast = 20*np.log10(_frame_envelope(band,sr,hop,.065,.145))-level
+    active = level > max(np.percentile(level,95)-16,-43)
+    if not active.any():
+        return vocal
+    target = np.percentile(contrast[active],60)
+    gain = np.clip((target-contrast)/6,0,1)*np.clip((level+43)/10,0,1)
+    curve = amount*_interpolate_frames(gaussian_filter1d(gain,4),len(vocal),hop)
+    filled = bell(vocal,sr,225,2.5,.8)
+    return (vocal+(filled-vocal)*curve).astype(np.float32)
+
+
+def _vocal_chain(vocal, sr, lowcut_hz, eq, compression, deessing, combined, harmonics=1.):
+    smile = float(np.clip(eq-1.,0.,1.))
+    eq = min(eq,1.)
     target = audio.rms(vocal)
     y = (sosfilt(butter(2,lowcut_hz,btype="highpass",fs=sr,output="sos"),vocal)
          if lowcut_hz else vocal.copy())
@@ -173,15 +210,14 @@ def _vocal_chain(vocal, sr, lowcut_hz, eq, compression, deessing, combined):
         if eq:
             y = bell(y,sr,frequency,gain*eq,.8)
     y = audio.match_rms(y,target,max_gain_db=6).astype(np.float32)
-    if eq:
-        y = LowShelfFilter(cutoff_frequency_hz=160,gain_db=1.2*eq,q=.7071)(y,sr)
-        y = HighShelfFilter(cutoff_frequency_hz=min(8000,sr*.45),gain_db=3.*eq,q=.7071)(y,sr)
-    y = audio.match_rms(y,target,max_gain_db=6).astype(np.float32)
-    if combined:
-        y = warm_harmonics(y,sr)
-    y, max_deess = deess(y,sr,deessing)
-    return y, {"max_compression_db":max_reduction,"max_deess_db":max_deess,
-               "peak_compression_db":peak_reduction,"peak_threshold_dbfs":peak_threshold}
+    harmonics = harmonics if combined else 0.
+    result, stats = _vocal_tail(y,sr,target,eq,deessing,harmonics,smile)
+    if smile:
+        reference, _ = _vocal_tail(y,sr,target,eq,deessing,harmonics,0.)
+        result = _fill_thin_vocal(result,reference,sr,smile)
+    return result, {**stats,"smile_amount":smile,"dynamic_body_max_db":2.5*smile,
+                    "max_compression_db":max_reduction,
+                    "peak_compression_db":peak_reduction,"peak_threshold_dbfs":peak_threshold}
 
 
 def _backing(accompaniment, sidechain, sr, amount):
@@ -195,60 +231,82 @@ def _backing(accompaniment, sidechain, sr, amount):
     return bed.astype(np.float32), activity
 
 
+def _low_mid_duck(bed, vocal, sr, amount):
+    """人声低中频被遮住时，联动衰减伴奏的同频段，最大 2 dB。"""
+    if not amount:
+        return bed, 0.
+    band_filter = butter(2, LOW_MID_DUCK_BAND_HZ, btype='bandpass', fs=sr, output='sos')
+    bed_band = sosfiltfilt(band_filter, bed, axis=-1)
+    vocal_band = sosfiltfilt(band_filter, vocal)
+    hop = round(.01 * sr)
+    vocal_db = 20 * np.log10(_frame_envelope(vocal_band, sr, hop, .035, .18))
+    bed_db = 20 * np.log10(_frame_envelope(bed_band, sr, hop, .035, .18))
+    presence = np.clip((vocal_db + 42) / 14, 0, 1)
+    overlap = np.clip((bed_db - vocal_db) * amount / 6, 0, 1)
+    reduction = 2 * presence * overlap
+    gain = 10 ** (-_interpolate_frames(reduction, bed.shape[-1], hop) / 20)
+    return (bed - bed_band * (1 - gain)).astype(np.float32), float(reduction.max())
+
+
 def enhance(vocal, accompaniment, sr, space=1., lowcut_hz=75., eq=1., compression=1.,
             deessing=1., reverb=1., delay_amount=1., duck=1., reference_vocal=None,
-            vocal_gain_db=0., gain_db=None, capture=None, body_gains=None):
-    """已选 B：慢速原唱比例、汇总增厚人声、统一空间和整曲总线前的混音。"""
-    y, vocal_stats = _vocal_chain(vocal,sr,lowcut_hz,eq,compression,deessing,True)
+            vocal_gain_db=0., gain_db=None, capture=None, harmonics=1.):
+    """人声音色、慢速比例、空间及伴奏避让，输出母带前的立体声。"""
+    y, vocal_stats = _vocal_chain(vocal,sr,lowcut_hz,eq,compression,deessing,True,harmonics)
     balance_stats = {"reference_used":False}
     if reference_vocal is not None and gain_db is None:
         # 手动人声音量不参与自动比例估计，避免自动增益抵消用户调节。
-        # 保留原先独立选定的比例分析链，增厚与空间更新不改变这条慢速曲线。
+        # 遮蔽避让只参与实际混音，比例曲线用独立分析链计算。
         analysis_voice = vocal * 10**(-vocal_gain_db/20)
-        analysis_y, _ = _vocal_chain(analysis_voice,sr,lowcut_hz,eq,compression,deessing,False)
+        analysis_y, _ = _vocal_chain(analysis_voice,sr,lowcut_hz,min(eq,1.),compression,deessing,False)
         bed, activity = _backing(accompaniment,analysis_y,sr,duck)
-        baseline = analysis_y[None,:] + space*(early_reflections(analysis_y,sr) +
-                    reverb*room(analysis_y,sr,size=.52) + delay_amount*delay(analysis_y,sr))
+        baseline = (analysis_y[None,:] + early_reflections(analysis_y,sr) +
+                    room(analysis_y,sr,size=.52) + delay(analysis_y,sr))
         times, curve_db, balance_stats = mix_balance.curve(analysis_y,baseline,bed,reference_vocal,accompaniment,sr,
                                                            original_dry=analysis_voice)
         gain_db = np.interp(np.arange(len(vocal))/sr,times,curve_db)
         if capture is not None:
             capture['mix_gain_curve'] = {'times':times, 'gain_db':curve_db}
     scale = (10**(np.asarray(gain_db)/20)).astype(np.float32) if gain_db is not None else 1.
-    y, body_stats = vocal_body.process(y, sr, scale=scale, normalization=body_gains)
-    # 所有新增分量先汇总，实际伴奏避让与空间闪避均由这条人声驱动。
+    scaled_vocal = y * scale
     bed, activity = _backing(accompaniment,y,sr,duck)
+    bed, low_mid_reduction = _low_mid_duck(bed, scaled_vocal, sr, duck)
+    long_tail = float(np.clip(reverb-1.,0.,1.))
+    short_send = min(reverb,1.)
+    long_send = short_send + .4*long_tail
+    room_size = .66 + .12*long_tail
+    wet_duck_db = 4.5 - 1.5*long_tail
     wet = 0.
     if space:
-        env = envelope(y*scale,sr,attack=.025,release=.25)
+        env = envelope(scaled_vocal,sr,attack=.025,release=.25)
         wet_activity = np.clip((20*np.log10(np.maximum(env,1e-8))+33)/18,0,1)
-        wet_gain = (10**(-4.5*wet_activity/20)).astype(np.float32)
+        wet_gain = (10**(-wet_duck_db*wet_activity/20)).astype(np.float32)
         short = 0.
         if reverb:
-            short = short_room(y,sr)*reverb
-            wet = room(y,sr,size=.66)*(10**(LONG_ROOM_RETURN_DB/20)*reverb)
+            short = short_room(y,sr)*short_send
+            wet = room(y,sr,size=room_size)*(10**(LONG_ROOM_RETURN_DB/20)*long_send)
         if delay_amount:
             wet = wet + delay(y,sr)*delay_amount
         wet = (short + wet*wet_gain)*space
     mixed = bed + (y[None,:]+wet)*scale
     if capture is not None:
         from .report_analysis import voice_features
-        capture['report_vocal_features'] = voice_features(y*scale, sr)
+        capture['report_vocal_features'] = voice_features(scaled_vocal, sr)
+    mid_eq = min(eq,1.)
     return mixed.astype(np.float32), {"enabled":True,"highpass_hz":lowcut_hz,
-          "eq_bands":[[350,-2*eq],[180,1.5*eq],[2800,1.2*eq],[260,1.*eq],[500,.65*eq]],
-          "low_shelf_hz":160,"low_shelf_gain_db":1.2*eq,
-          "high_shelf_hz":min(8000,sr*.45),"high_shelf_gain_db":3.*eq,
+          "eq_bands":[[350,-2*mid_eq],[180,1.5*mid_eq],[2800,1.2*mid_eq],[260,mid_eq],[500,.65*mid_eq]],
           "compression_threshold_dbfs":-22,"compression_ratio":3., **vocal_stats,
-          "eq_amount":eq,"compression_amount":compression,"deess_amount":deessing,
+          "eq_amount":eq,"compression_amount":compression,"deess_amount":deessing,"harmonics_amount":harmonics,
           "reverb_amount":reverb,"delay_amount":delay_amount,"duck_amount":duck,
           "deess_position":"after_eq","deess_strength":.3*deessing,
-          "harmonics_oversampling":4,"reverb_engine":"Freeverb","reverb_room_size":.66,
-          "reverb_predelay_ms":20,"reverb_wet":.102*space*reverb,
+          "harmonics_oversampling":4,"reverb_engine":"Freeverb","reverb_room_size":room_size,
+          "reverb_predelay_ms":20,"reverb_wet":.102*space*long_send,
           "reverb_return_adjustment_db":LONG_ROOM_RETURN_DB,"reverb_tail_boost_db":3.,
           "short_room_return_db":SHORT_ROOM_RETURN_DB,"short_room_predelay_ms":8,
-          "vocal_body":body_stats,"mix_preset":vocal_body.PRESET,
+          "mix_preset":MIX_PRESET,
+          "low_mid_duck_band_hz":list(LOW_MID_DUCK_BAND_HZ),"max_low_mid_duck_db":low_mid_reduction,
           "delay_wet":.025*space*delay_amount,
-          "wet_duck_max_db":4.5 if space else 0.,"reference_balance":balance_stats,
+          "wet_duck_max_db":wet_duck_db if space else 0.,"reference_balance":balance_stats,
           "duck_band_hz":[250,min(4000,sr*.45)],"max_band_duck_db":float(np.max(activity)*2.5*duck),
           "max_broadband_duck_db":float(np.max(activity)*.6*duck)}
 
@@ -274,7 +332,8 @@ def bus_compress(mixed, sr):
                         "median_reduction_db":float(np.median(reduction))}
 
 
-def master(mixed,sr,target_lufs=-16.,true_peak_ceiling=-1.5,apply_glue=False):
+def master(mixed,sr,target_lufs=-16.,true_peak_ceiling=-1.5,apply_glue=False,
+           density=None,density_reference=None):
     with tempfile.TemporaryDirectory(prefix="shadowvox-master-") as folder:
         path = Path(folder)/"mix.wav"
         sf.write(path,mixed.T,sr,subtype="FLOAT")
@@ -284,8 +343,14 @@ def master(mixed,sr,target_lufs=-16.,true_peak_ceiling=-1.5,apply_glue=False):
                     "target_lufs":target_lufs,"true_peak_ceiling_dbtp":true_peak_ceiling}
         pre_gain = 0.
         bus_stats = {"enabled":False}
+        density_stats = {"amount":density,"applied":False}
         lufs = input_lufs
-        if apply_glue:
+        if density:
+            from .density import densify
+            mixed, density_stats = densify(mixed,sr,input_lufs,density,density_reference)
+            sf.write(path,mixed.T,sr,subtype="FLOAT")
+            lufs, peak = measure_loudness(path)
+        elif density is None and apply_glue:
             pre_gain = min(-19.-input_lufs,12.)
             mixed, bus_stats = bus_compress(mixed*10**(pre_gain/20),sr)
             sf.write(path,mixed.T,sr,subtype="FLOAT")
@@ -309,7 +374,7 @@ def master(mixed,sr,target_lufs=-16.,true_peak_ceiling=-1.5,apply_glue=False):
         correction = min(0.,true_peak_ceiling-.05-output_peak) if np.isfinite(output_peak) else 0.
         result *= 10**(correction/20)
     return result,{"input_lufs":input_lufs,"master_gain_db":pre_gain+gain,"limiter_used":limiter,
-                   "bus_normalization_db":pre_gain,"bus_compression":bus_stats,
+                   "bus_normalization_db":pre_gain,"bus_compression":bus_stats,"density":density_stats,
                    "true_peak_correction_db":correction,
                    "estimated_output_lufs":output_lufs+correction if np.isfinite(output_lufs) else None,
                    "measured_output_true_peak_dbtp":output_peak+correction if np.isfinite(output_peak) else None,

@@ -225,7 +225,7 @@ def _banded_dtw(c_dry, c_ref, v_dry, v_ref, band_frames, diag_prior=0.03):
 
 def estimate_shift(dry_f0, ref_f0, strength=1.0, max_shift_cents=700.0,
                    smooth_ms=0.0, band_seconds=0.30, offset_override=None,
-                   pitch_mode="frame", reference_times=None, reference_valid=None):
+                   pitch_mode="frame", reference_times=None, reference_valid=None, register_detail=0.):
     nd = len(dry_f0)
     if nd == 0 or len(ref_f0) == 0:
         raise ValueError("音高曲线为空")
@@ -272,7 +272,7 @@ def estimate_shift(dry_f0, ref_f0, strength=1.0, max_shift_cents=700.0,
     if pitch_mode == "register":
         from .register import register_shift
         shift, reliable, octave = register_shift(dry_c, target, voiced, strength,
-                                                  min(max_shift_cents, 450))
+                                                  min(max_shift_cents, 450), register_detail)
         confidence = reliable.astype(float)
         register_stats = {"register_skipped_frames": int((voiced & ~reliable).sum()),
                           "register_octave_counts": {

@@ -1,4 +1,6 @@
 """原曲人声分离（MDX-Net / UVR 模型），拿原唱人声当音高参考，伴奏用于成品混音。"""
+import hashlib
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +9,36 @@ import onnxruntime as ort
 from . import audio, config as C
 
 DEFAULT_MODEL = "Kim_Vocal_2.onnx"
+
+
+def isolate_dry(path, work_dir, length, reuse, log):
+    """分离干声中的伴奏，缓存等长的人声，保留原始时间轴。"""
+    work = Path(work_dir)/'dry'
+    work.mkdir(parents=True, exist_ok=True)
+    model = C.MODELS/DEFAULT_MODEL
+    fingerprint = []
+    for source in (Path(path), model):
+        stat = source.stat()
+        fingerprint.append((str(source.resolve()), stat.st_size, stat.st_mtime_ns))
+    tag = hashlib.sha256(repr(fingerprint).encode()).hexdigest()[:16]
+    cache = work/f'vocals_{tag}.npy'
+    if reuse and cache.is_file():
+        try:
+            vocal = np.load(cache)
+        except (OSError, ValueError, EOFError):
+            pass
+        else:
+            if vocal.shape == (length,) and vocal.dtype == np.float32 and np.isfinite(vocal).all():
+                log('[干声分离] 复用分离缓存')
+                return vocal, True
+    vocal = separate_song(path,work,model=DEFAULT_MODEL,log=log)['vocals']
+    if vocal.shape != (length,) or not np.isfinite(vocal).all():
+        raise RuntimeError('干声分离输出异常，无法保留原时间轴')
+    with tempfile.TemporaryDirectory(dir=work) as folder:
+        staged = Path(folder)/'vocals.npy'
+        np.save(staged,vocal)
+        staged.replace(cache)
+    return vocal, False
 
 
 def _use_directml():

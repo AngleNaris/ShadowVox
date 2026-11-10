@@ -50,7 +50,7 @@ class SelectedMixTests(unittest.TestCase):
                                     reference_vocal=np.zeros_like(self.voice))
         self.assertFalse(missing['reference_balance']['reference_used'])
 
-    def test_selected_short_room_and_wetter_tail_use_summed_vocal(self):
+    def test_selected_short_room_and_wetter_tail_use_processed_vocal(self):
         voice = self.voice[:4*self.sr].copy()
         voice[self.sr:] = 0
         bed = np.zeros((2,len(voice)), dtype=np.float32)
@@ -67,7 +67,7 @@ class SelectedMixTests(unittest.TestCase):
         self.assertGreater(audio.rms(result[:,tail]),1.4*audio.rms(reference[:,tail]))
         self.assertEqual(info['reverb_room_size'],.66)
         self.assertEqual(info['reverb_tail_boost_db'],3.)
-        self.assertEqual(info['vocal_body']['preset'],'B_light_third')
+        self.assertEqual(info['mix_preset'], mixing.MIX_PRESET)
 
     def test_bus_compression_is_stereo_linked_and_master_measures_output(self):
         t = np.arange(4*self.sr)/self.sr
@@ -86,8 +86,50 @@ class SelectedMixTests(unittest.TestCase):
         self.assertAlmostEqual(lufs,report['estimated_output_lufs'],delta=.15)
         self.assertLessEqual(peak,-1.5)
 
+    def test_eq_above_standard_reaches_the_approved_smile(self):
+        silent_bed = np.zeros_like(self.bed)
+        outputs = {}
+        for eq, expected in ((1., (160., 1.2, 3.)),
+                             (1.5, (190., 3.6, 6.)),
+                             (2., (220., 6., 9.))):
+            mixed, report = mixing.enhance(self.voice,silent_bed,self.sr,space=0,duck=0,eq=eq)
+            shelves = [report[key] for key in ('low_shelf_hz','low_shelf_gain_db','high_shelf_gain_db')]
+            np.testing.assert_allclose(shelves,expected)
+            self.assertEqual(report['dynamic_body_max_db'],2.5*(eq-1.))
+            self.assertEqual(report['eq_bands'][0],[350,-2.])
+            outputs[eq] = mixed
+        self.assertGreater(float(np.max(np.abs(outputs[2.]-outputs[1.]))),1e-3)
+
+    def test_reverb_high_extends_tail_and_keeps_vocal_balance(self):
+        voice = self.voice.copy()
+        voice[3*self.sr:] = 0.
+        bed = np.zeros_like(self.bed)
+        low, high = {}, {}
+        normal, _ = mixing.enhance(voice,bed,self.sr,reference_vocal=self.reference,
+                                   capture=low,delay_amount=0)
+        strong, report = mixing.enhance(voice,bed,self.sr,reference_vocal=self.reference,
+                                        capture=high,delay_amount=0,reverb=2.)
+        tail = slice(round(3.6*self.sr),round(4.2*self.sr))
+        self.assertGreater(audio.rms(strong[:,tail]),2*audio.rms(normal[:,tail]))
+        self.assertEqual(report['reverb_room_size'],.78)
+        np.testing.assert_array_equal(low['mix_gain_curve']['gain_db'],high['mix_gain_curve']['gain_db'])
+
 
 class PipelineMixTests(unittest.TestCase):
+    def test_master_preserves_dynamics_when_target_is_unreachable(self):
+        from shadowvox import mastering
+
+        mixed = np.full((2, 8000), .1, dtype=np.float32)
+        def level(samples, sr):
+            return 20*np.log10(float(np.sqrt(np.mean(samples**2))))
+        with patch.object(mastering, '_loudness', side_effect=level), \
+             patch.object(mastering, '_sections', return_value=np.zeros(mixed.shape[-1])), \
+             patch.object(mastering, '_limit', side_effect=lambda mix, sr, gain: np.minimum(mix*gain, .3)):
+            result, stats = mastering.finalize(mixed, 8000)
+        self.assertEqual(stats['stop_reason'], 'reduction_limit')
+        self.assertLessEqual(stats['limiter']['median_reduction_db'], 3.2)
+        self.assertAlmostEqual(level(result, 8000), 20*np.log10(.3), places=4)
+
     def test_full_pipeline_passes_reference_and_applies_glue(self):
         sr = 44100
         t = np.arange(6*sr)/sr
@@ -109,7 +151,7 @@ class PipelineMixTests(unittest.TestCase):
             dry, song, output = folder/'dry.wav', folder/'song.wav', folder/'out.wav'
             sf.write(dry,vocal,sr); sf.write(song,bed.T,sr)
             opts = pipeline.Options(strength=0, denoise=False, declip=False, rhythm=False,
-                                    renderer='psola', mix_effects=True)
+                                    renderer='psola', mix_effects=True, mix_eq=2.)
             capture = {}
             with patch.object(pipeline,'_load_or_separate',return_value=(reference,bed)), \
                  patch.object(pipeline,'FcpeExtractor',Extractor), \
@@ -118,6 +160,7 @@ class PipelineMixTests(unittest.TestCase):
                 report = pipeline.run(dry,song,output,opts=opts,capture=capture,log=lambda _: None)
             self.assertTrue(report['mixing']['reference_balance']['reference_used'])
             self.assertTrue(report['mixing']['bus_compression']['enabled'])
+            self.assertEqual(report['mixing']['smile_amount'],1.)
             self.assertIn('mix_gain_curve',capture)
             self.assertEqual(capture['move'], 0.)
             rendered, output_sr = sf.read(output,always_2d=True)
@@ -127,8 +170,9 @@ class PipelineMixTests(unittest.TestCase):
             preview = PreviewCache(capture, report, {'gains_db':[0,0]})
             with patch.object(mixing,'enhance',wraps=mixing.enhance) as draft_mix:
                 _, first = preview.render(opts,0,seconds=4)
-            self.assertEqual(draft_mix.call_args.kwargs['body_gains'],
-                             report['mixing']['vocal_body']['normalization'])
+            self.assertEqual(draft_mix.call_args.kwargs['duck'], opts.mix_duck)
+            self.assertEqual(draft_mix.call_args.kwargs['eq'], 2.)
+            self.assertIsNotNone(draft_mix.call_args.kwargs['gain_db'])
             capture['mix_gain_curve']['gain_db'] -= 1
             _, softer = preview.render(opts,0,seconds=4)
             self.assertEqual(first.shape,softer.shape)
@@ -142,7 +186,16 @@ class PipelineMixTests(unittest.TestCase):
                  patch('shadowvox.psola.render',side_effect=lambda signal,*args,**kwargs: signal):
                 bypassed = pipeline.run(dry,song,folder/'bypass.wav',
                                         opts=replace(opts,mix_effects=False),log=lambda _: None)
+                fixed = pipeline.run(dry,song,folder/'fixed.wav',
+                                     opts=replace(opts,mix_effects=False,fixed_master=True,target_lufs=-21.,
+                                                  true_peak_ceiling=-2.,master_density=1.), log=lambda _: None)
             self.assertFalse(bypassed['mixing']['enabled'])
+            stats = fixed['mixing']
+            self.assertEqual((fixed['options']['target_lufs'], fixed['options']['true_peak_ceiling']),(-8.,-.5))
+            self.assertFalse(stats['enabled'] or stats['density']['applied'])
+            self.assertTrue(stats['readback_verified'] and stats['target_reached'])
+            self.assertEqual(stats['engine'],'C+')
+            self.assertLessEqual(stats['measured_output_true_peak_dbtp'],-.5)
 
 
 if __name__ == '__main__':

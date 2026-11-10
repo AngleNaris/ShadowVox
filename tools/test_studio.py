@@ -157,13 +157,18 @@ class DesktopBridgeTests(unittest.TestCase):
         from shadowvox.gui_bridge import options_from
         o = options_from(self.DEFAULTS)
         self.assertEqual((o.strength, o.pitch_mode, o.renderer, o.rhythm_mode, o.max_shift_cents), (.75, 'register', 'psola', 'full', 450))
-        self.assertEqual((o.mix_eq, o.mix_reverb, o.mix_lowcut_hz, o.target_lufs, o.true_peak_ceiling, o.vocal_gain_db), (1., 1., 75., -16., -1.5, 0.))
+        self.assertEqual((o.mix_eq, o.mix_reverb, o.mix_lowcut_hz, o.target_lufs, o.true_peak_ceiling, o.vocal_gain_db), (1., 1., 75., -8., -.5, 0.))
         self.assertTrue(o.mix_effects and o.rhythm and o.denoise and o.declip and o.comparison)
         o = options_from({**self.DEFAULTS, 'mix_eq': 150, 'vocal_gain_db': -2.5, 'denoise': False})
         self.assertEqual((o.mix_eq, o.vocal_gain_db, o.denoise), (1.5, -2.5, False))
+        for mixdown in (0, 100):
+            o = options_from(dict(correction=50, beauty=50, fusion=50, ratio=35, mixdown=mixdown,
+                                  mix_effects=False, target_lufs=-24, true_peak_ceiling=-4))
+            self.assertEqual((o.fixed_master, o.target_lufs, o.true_peak_ceiling, o.master_density),
+                             (True, -8., -.5, mixdown/100))
 
     def test_versions_never_overwrite(self):
-        from shadowvox.gui_bridge import next_version
+        from shadowvox.jobs import next_version
         with tempfile.TemporaryDirectory() as folder:
             self.assertEqual(next_version(folder, '干声'), 1)
             for name in ('干声_V1.wav', '干声_V3.wav', '干声_V2.report.json', '其他_V9.wav'):
@@ -187,13 +192,14 @@ class DesktopBridgeTests(unittest.TestCase):
         player._callback(out, 4, None, SimpleNamespace(output_underflow=False))
         self.assertFalse(player.playing); np.testing.assert_array_equal(out[2:4, 0], [0, 0])
 
-    def test_waveform_envelopes_share_scale(self):
-        from shadowvox.gui_bridge import envelope
-        tracks = [np.full((9600, 2), value, dtype=np.float32) for value in (.1, .3, .9)]
-        peaks = [envelope(t, 100)[0] for t in tracks]
-        scale = max(float(np.percentile(p, 99.5)) for p in peaks)
-        for peak, expected in zip(peaks, (.1/.9, .3/.9, 1.)):
-            np.testing.assert_allclose(peak/scale, expected, atol=1e-6)
+    def test_waveform_uses_stereo_energy_and_includes_tail(self):
+        from shadowvox.gui_bridge import envelope, wave_values
+        track = np.array([[.3, 0], [.3, 0], [0, 0], [0, 0], [0, -.9]], dtype=np.float32)
+        peak, rms = envelope(track, 2)
+        np.testing.assert_allclose(peak, [.3, .9])
+        np.testing.assert_allclose(rms, [.3/np.sqrt(2), .9/np.sqrt(6)])
+        values = wave_values(*envelope(track*.25), gain=4)
+        self.assertEqual(values['peak'], [.3, .3, 0., 0., .9])
 
 
 if __name__ == '__main__':

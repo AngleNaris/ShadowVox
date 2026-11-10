@@ -44,6 +44,8 @@ def onset_offset(dry_f0, ref_f0, max_lag=1.5):
     比「音高误差扫描」更贴合入点优先级 —— 音高扫描对齐的是音符中段。
     """
     a, b = onset_train(dry_f0), onset_train(ref_f0)
+    if not (a.any() and b.any()):
+        return 0.
     ml = int(max_lag * FPS)
     size = 1 << int(np.ceil(np.log2(len(a) + len(b))))
     cc = np.fft.irfft(np.fft.rfft(b, size) * np.conj(np.fft.rfft(a, size)), size)

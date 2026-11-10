@@ -9,14 +9,19 @@ from PyInstaller.utils.win32.versioninfo import (
     VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable, StringStruct, VarFileInfo, VarStruct)
 
 root=Path(SPECPATH)
-version=runpy.run_path(str(root/'src/shadowvox/__init__.py'))['__version__']
+zl_bundles=[root/f'plugins/ZL {name}.vst3' for name in ('Compressor','Limiter')]
+zl_license=root/'plugins/ZL-AGPL-3.0.txt'
+if any(not (bundle/'Contents/x86_64-win'/bundle.name).is_file() for bundle in zl_bundles) or not zl_license.is_file():
+    raise SystemExit('请先运行 python tools/fetch_zl.py')
+app_info=runpy.run_path(str(root/'src/shadowvox/__init__.py'))
+version=app_info['__version__']
 filename=f'ShadowVox-{version}'
 version_info=VSVersionInfo(
     ffi=FixedFileInfo(filevers=tuple(map(int,version.split('.')))+(0,),
                       prodvers=tuple(map(int,version.split('.')))+(0,), fileType=1),
     kids=[StringFileInfo([StringTable('080404B0',[
         StringStruct('FileDescription','ShadowVox 修音工作台'),
-        StringStruct('ProductName','ShadowVox'),
+            StringStruct('ProductName','ShadowVox'), StringStruct('CompanyName',app_info['AUTHOR']),
         StringStruct('FileVersion',version), StringStruct('ProductVersion',version),
         StringStruct('OriginalFilename',filename+'.exe')])]),
         VarFileInfo([VarStruct('Translation',[2052,1200])])])
@@ -30,7 +35,9 @@ datas=[(str(root/'THIRD_PARTY.txt'),'licenses'),(str(root/'models/fcpe.onnx'),'m
        (str(root/'src/shadowvox/vendor/synctoolbox/LICENSE'),'licenses/synctoolbox'),
        (str(root/'src/shadowvox/vendor/hubertfa/LICENSE'),'licenses/hubertfa'),
        (str(root/'src/shadowvox/vendor/hubertfa/ORIGIN.txt'),'licenses/hubertfa'),
-       (str(root/'tools/vendor/deepfilternet/licenses'),'licenses/deepfilternet')]
+       (str(root/'tools/vendor/deepfilternet/licenses'),'licenses/deepfilternet'),
+       (str(zl_license),'licenses/zl-compressor')]
+datas += [(str(bundle),f'plugins/{bundle.name}') for bundle in zl_bundles]
 # 整句对齐与 R3 变速：官方 Rubber Band 命令行（GPL-2.0-or-later）及其 libsndfile。
 rubberband=root/'tools/vendor/rubberband-4.0.0/rubberband-4.0.0-gpl-executable-windows'
 datas+=[(str(rubberband/'COPYING.txt'),'licenses/rubberband')]

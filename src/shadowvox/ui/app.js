@@ -3,6 +3,7 @@
 'use strict';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const switchOn = el => el.getAttribute('aria-checked') === 'true';
 const RM = matchMedia('(prefers-reduced-motion: reduce)');
 const EASE = 'cubic-bezier(.25,.6,.35,1)';
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -12,6 +13,7 @@ const store = {
 };
 let bridge = null;
 const call = (name, ...args) => new Promise(res => (bridge ? bridge[name](...args, res) : res(undefined)));
+const theme = window.ShadowTheme;
 
 /* 读屏播报：先清空，下一帧再写入，保证相同文字也会重读 */
 function announce(text) {
@@ -24,21 +26,6 @@ function markNeed(el) {
   el.classList.remove('need'); void el.offsetWidth; el.classList.add('need');
   clearTimeout(el._need); el._need = setTimeout(() => el.classList.remove('need'), 1400);
 }
-const easeOut = t => 1 - Math.pow(1 - t, 3);
-/* 数值动画：结束一定回调；reduced-motion 直接到终态 */
-function tween(ms, step) {
-  let done = false, start = null;
-  const finish = () => { if (!done) { done = true; step(1); } };
-  if (RM.matches || ms <= 0) { finish(); return; }
-  const frame = now => {
-    if (done) return;
-    start ??= now;
-    const t = Math.min(1, (now - start) / ms);
-    if (t >= 1) finish(); else { step(easeOut(t)); requestAnimationFrame(frame); }
-  };
-  requestAnimationFrame(frame);
-  setTimeout(finish, ms + 250);
-}
 const clock = (s, ms = false) => {
   s = Math.max(0, s || 0);
   const m = Math.floor(s / 60), sec = s - m * 60;
@@ -48,60 +35,49 @@ const clock = (s, ms = false) => {
 /* ═══ 参数表：唯一来源；默认值与已确认的处理链一致 ═══ */
 const pct = v => `${Math.round(v)}%`;
 const PARAMS = {
-  strength: { name: '音高', label: '音高修正', min: 0, max: 100, step: 1, def: 75, fmt: pct },
-  rhythm_strength: { name: '节奏', label: '节奏强度', min: 0, max: 100, step: 5, def: 100, fmt: pct, power: 'rhythm' },
-  denoise_strength: { name: '降噪', label: 'AI 降噪强度', min: 0, max: 100, step: 5, def: 100, fmt: pct, power: 'denoise' },
-  vocal_gain_db: { name: '人声音量', label: '人声音量', min: -6, max: 6, step: .5, def: 0, fmt: v => `${v > 0 ? '+' : ''}${v.toFixed(1)} dB` },
-  target_lufs: { name: '成品目标响度', label: '整首成品目标综合响度（人声与伴奏）', min: -24, max: -12, step: 1, def: -16, fmt: v => `${v} LUFS`, mix: true },
-  true_peak_ceiling: { name: '成品峰值上限', label: '整首成品真峰值上限（人声与伴奏）', min: -3, max: -1, step: .1, def: -1.5, fmt: v => `${v.toFixed(1)} dBTP`, mix: true },
-  mix_lowcut_hz: { name: '低切', label: '低切', min: 0, max: 150, step: 5, def: 75, fmt: v => (v ? `${v} Hz` : '关闭') },
-  mix_eq: { name: '均衡', label: '均衡', min: 0, max: 200, step: 5, def: 100, fmt: pct },
-  mix_compression: { name: '压缩', label: '压缩', min: 0, max: 200, step: 5, def: 100, fmt: pct },
-  mix_deess: { name: '去齿', label: '去齿', min: 0, max: 200, step: 5, def: 100, fmt: pct },
-  mix_reverb: { name: '混响', label: '混响', min: 0, max: 200, step: 5, def: 100, fmt: pct },
-  mix_delay: { name: '延时', label: '延时', min: 0, max: 200, step: 5, def: 100, fmt: pct },
-  mix_duck: { name: '伴奏避让', label: '伴奏避让', min: 0, max: 200, step: 5, def: 100, fmt: pct },
+  correction: { name: '修正', min: 0, max: 100, step: 1, def: 50, fmt: pct },
+  beauty: { name: '美化', min: 0, max: 100, step: 1, def: 50, fmt: pct, post: true },
+  fusion: { name: '融合', min: 0, max: 100, step: 1, def: 50, fmt: pct, post: true },
+  ratio: { name: '比例', min: -100, max: 100, step: 1, def: 0,
+    fmt: v => v ? `${v > 0 ? '靠前' : '靠后'} ${Math.abs(v)}` : '平衡' },
+  mixdown: { name: '混音', min: 0, max: 100, step: 1, def: 100, fmt: pct, post: true },
 };
-const SWITCHES = { rhythm: '节奏匹配', denoise: 'AI 降噪', declip: '削波修复', mix_effects: '后期总开关' };
-const RACKS = [
-  { key: 'cleanup', title: '干声清理', cells: ['@declip', 'denoise_strength'] },
-  { key: 'tune', title: '修音', cells: ['rhythm_strength', 'strength'] },
-  { key: 'level', title: '人声电平', cells: ['vocal_gain_db'] },
-  { key: 'tone', title: '音色与动态', post: true, bypass: 'mix_effects', groups: [
-    { title: 'EQ', cells: ['mix_lowcut_hz', 'mix_eq'] },
-    { title: '动态', cells: ['mix_compression', 'mix_deess'] }] },
-  { key: 'mix', title: '混音', post: true, groups: [
-    { title: '空间与伴奏', cells: ['mix_duck', 'mix_reverb', 'mix_delay'] }] },
-  { key: 'output', title: '成品输出', post: true, groups: [
-    { title: '人声 + 伴奏', cells: ['target_lufs', 'true_peak_ceiling'] }] },
+const LEGACY_KEYS = {
+  correction: ['strength', 'rhythm_strength', 'denoise_strength', 'rhythm', 'denoise', 'declip'],
+  beauty: ['mix_lowcut_hz', 'mix_eq', 'mix_compression', 'mix_deess'],
+  fusion: ['mix_duck', 'mix_reverb', 'mix_delay'],
+  ratio: ['vocal_gain_db'],
+  mixdown: [],
+};
+const LEGACY_SWITCHES = ['rhythm', 'denoise', 'declip'];
+const legacyKeys = Object.values(LEGACY_KEYS).flat();
+function savedLegacy() {
+  const saved = store.get('legacy_params', null);
+  if (saved !== null) return saved;
+  const pairs = legacyKeys.map(k => [k, store.get((LEGACY_SWITCHES.includes(k) ? 'switch_' : 'param_') + k, null)]);
+  return Object.fromEntries(pairs.filter(([, v]) => v !== null));
+}
+const HELP = [
+  ['修正', '联动干声降噪、削波修复、节奏对齐和音高校正。启用后，按原唱的演唱区间静音干声空档。'],
+  ['美化', '调节人声本身的音色和动态，联动低切、均衡、双级压缩、去齿音和增厚。'],
+  ['融合', '联动混响、延时和伴奏避让。演唱时给人声腾出空间，高档更容易听到句尾混响。'],
+  ['比例', '调节人声相对伴奏的前后位置，范围为 −6 到 +6 dB。中点为平衡，靠前 35 对应 +2.1 dB。'],
+  ['混音', '调节人声和伴奏合成后的多段压缩密度。整曲导出固定以 −8 LUFS-I 为目标，真峰值上限为 −0.5 dBTP。持续限幅过重时会保留更多动态，实际响度可能较低。关闭后期总开关时也会执行母带。'],
+  ['旧设置', '读数显示「旧设置」时使用原来保存的参数。调整某一项后，该项改用联动参数。'],
 ];
-const HELP = {
-  cleanup: [['削波修复', '先检查原始干声，只在检测到明显数字削波时保守修复；这个开关不会增加削波。归一化或有损编码后的削波可能漏检。'],
-    ['降噪', '削波检查后，再在原始干声与 DeepFilterNet3 温和降噪结果之间混合。0% 旁路降噪，100% 使用已确认的温和档；点按名称可开关。']],
-  tune: [['节奏', '当前支持中文歌声。先识别唱词、核对字头与韵母，再修音高。100% 使用受限对齐；0% 或关闭时保持原始时间位置。未匹配处保持原位原速，始终保留原始歌词顺序。'],
-    ['音高', '只跟随演唱的音高中心修正，保留大部分颤音与滑音；用 PSOLA 直接在原始波形上移调。严重的音高误检处可能有瑕疵。']],
-  level: [['人声音量', '修音后、进入音色和空间处理前的人声额外增益，范围 ±6 dB。只调整人声；整首歌的输出响度在最后的“成品输出”面板设定。']],
-  tone: [['EQ / 动态', '低切、均衡与压缩、去齿共同处理人声。现有均衡包含压缩前后的环节，因此在同一面板内分组，不改变既有处理顺序。100% 对应已确认的默认效果，0% 旁路该项。'],
-    ['后期总开关', '同时开关“音色与动态”“混音”和“成品输出”。关闭后只将人声与伴奏合并，不做这些后期效果；上方人声音量仍可调。']],
-  mix: [['伴奏避让', '处理后的人声触发伴奏让位，与人声空间效果汇合成混音。'],
-    ['混响 / 延时', '开源 Freeverb 自然流行混响与独立短延时发送；不调用 VST3 效果。'],
-    ['开关', '受“音色与动态”标题右侧的后期总开关控制。']],
-  output: [['成品目标响度', '人声和伴奏混合后的整首歌目标综合响度，范围 −24 至 −12 LUFS；不单独调整人声。'],
-    ['成品峰值上限', '整首歌的真峰值上限，范围 −3 至 −1 dBTP。为保护峰值，实际综合响度可能低于目标；以报告中的实测值为准。'],
-    ['开关', '后期总开关关闭时，这两个成品输出设置不参与处理。']],
-};
-const AUDITION = '调整参数后，草稿会在后台重算当前播放位置附近的片段，属局部近似试听；要保存新设置，请再次生成成品。';
+const AUDITION = '拖动方形调节点可同时调整两轴，也可按 Tab 选中一项，再用方向键微调。开启「实时预览」后，调参会在后台更新播放位置附近的草稿。要保存新设置，请再次生成成品。';
 
-const P = {}, SW = {}, knobs = {};
+const P = {}, SW = { mix_effects: store.get('switch_mix_effects', true) !== false };
+let legacy = savedLegacy();
+const hasLegacy = key => LEGACY_KEYS[key].some(k => Object.hasOwn(legacy, k));
 for (const [k, d] of Object.entries(PARAMS)) P[k] = snapTo(store.get('param_' + k, d.def), d);
-for (const k of Object.keys(SWITCHES)) SW[k] = store.get('switch_' + k, true) !== false;
 function snapTo(v, d) {
   v = Number(v); if (!Number.isFinite(v)) v = d.def;
   return +clamp(Math.round((v - d.min) / d.step) * d.step + d.min, d.min, d.max).toFixed(4);
 }
-const params = () => ({ ...P, ...SW });
+const params = () => ({ ...P, ...SW, ...legacy, dry_has_backing: switchOn($('#dry-has-backing')) });
 
-/* ═══ 旋钮：上下拖动（约 200px 走满，Shift 精调）、滚轮、方向键、双击复位 ═══ */
+/* ═══ 监听音量：上下拖动、滚轮、方向键、双击复位 ═══ */
 function makeKnob(el, d, value, onChange) {
   el.classList.add('knob-wrap'); el.tabIndex = 0; el.setAttribute('role', 'slider');
   el.innerHTML = '<span class="knob-ring"></span><span class="knob-cap"></span><span class="knob-tick"></span>';
@@ -110,9 +86,10 @@ function makeKnob(el, d, value, onChange) {
     el.style.setProperty('--v', (value - d.min) / (d.max - d.min));
     el.setAttribute('aria-valuenow', value); el.setAttribute('aria-valuetext', d.fmt(value));
   };
-  const set = (v, user) => {
-    v = snapTo(v, d); if (v === value) return;
-    value = v; render(); if (user) onChange(v);
+  const set = v => {
+    v = snapTo(v, d);
+    if (v === value) return;
+    value = v; render(); onChange(v);
   };
   let drag = null;
   el.addEventListener('pointerdown', e => {
@@ -122,92 +99,177 @@ function makeKnob(el, d, value, onChange) {
   });
   el.addEventListener('pointermove', e => {
     if (!drag) return;
-    set(drag.v + (drag.y - e.clientY) * (d.max - d.min) / (e.shiftKey ? 800 : 200), true);
+    set(drag.v + (drag.y - e.clientY) * (d.max - d.min) / (e.shiftKey ? 800 : 200));
   });
   const end = () => { drag = null; el.classList.remove('dragging'); };
   el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
-  el.addEventListener('wheel', e => { e.preventDefault(); set(value + (e.deltaY < 0 ? d.step : -d.step), true); }, { passive: false });
-  el.addEventListener('dblclick', () => set(d.def, true));
+  el.addEventListener('wheel', e => { e.preventDefault(); set(value + (e.deltaY < 0 ? d.step : -d.step)); }, { passive: false });
+  el.addEventListener('dblclick', () => set(d.def));
   el.addEventListener('keydown', e => {
     const steps = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1, PageUp: 5, PageDown: -5 }[e.key];
-    if (steps) set(value + steps * d.step, true);
-    else if (e.key === 'Home') set(d.min, true);
-    else if (e.key === 'End') set(d.max, true);
+    if (steps) set(value + steps * d.step);
+    else if (e.key === 'Home') set(d.min);
+    else if (e.key === 'End') set(d.max);
     else return;
     e.preventDefault();
   });
   render();
-  return { get: () => value, set: v => { value = snapTo(v, d); render(); } };
 }
 
-/* ═══ 面板：按参数表生成；面板头 = 编号 + 标题 + 说明 + 旁路 ═══ */
+/* ═══ 声音处理 ═══ */
+const soundInput = key => $(`#sound-${key}`);
+const soundValue = key => hasLegacy(key) ? '旧设置' : PARAMS[key].fmt(P[key]);
+const soundFraction = key => (P[key] - PARAMS[key].min) / (PARAMS[key].max - PARAMS[key].min);
+
+function setSound(values, reset = false) {
+  let edited = false, legacyEdited = false;
+  for (const [key, input] of Object.entries(values)) {
+    if (soundInput(key).disabled) continue;
+    const value = snapTo(input, PARAMS[key]), old = hasLegacy(key);
+    if (value === P[key] && !(reset && old)) continue;
+    P[key] = value;
+    store.set('param_' + key, value);
+    if (old) {
+      for (const k of LEGACY_KEYS[key]) delete legacy[k];
+      legacyEdited = true;
+    }
+    edited = true;
+  }
+  if (!edited) return;
+  if (legacyEdited) store.set('legacy_params', legacy);
+  paint(); changed();
+}
+
+function rangeMarkup(key, className, vertical = false) {
+  const { min, max, step } = PARAMS[key];
+  return `<input id="sound-${key}" data-sound="${key}" class="${className}" type="range"
+    min="${min}" max="${max}" step="${step}"${vertical ? ' aria-orientation="vertical"' : ''}>`;
+}
+
+function scaleMarks(mark) {
+  return Array.from({ length: 21 }, (_, i) => mark(i * 5, i % 5 === 0)).join('');
+}
+
+function xyMarkup(x, y) {
+  const bipolar = PARAMS[x].min < 0;
+  const xLabel = `<label class="axis-label axis-x" for="sound-${x}">${PARAMS[x].name}</label>`;
+  const yLabel = `<label class="axis-label axis-y" for="sound-${y}">${PARAMS[y].name}</label>`;
+  const xRange = rangeMarkup(x, 'sr-only axis-input'), yRange = rangeMarkup(y, 'sr-only axis-input', true);
+  const marks = scaleMarks((p, major) => {
+    const length = major ? 2.2 : 1.05;
+    return `M${p} 0v${length}M${p} 100v-${length}M0 ${p}h${length}M100 ${p}h-${length}`;
+  });
+  return `<div class="xy-control" role="group" aria-label="${bipolar ? PARAMS[y].name + '与' + PARAMS[x].name : PARAMS[x].name + '与' + PARAMS[y].name}">
+    ${bipolar ? yLabel + xLabel : xLabel + yLabel}
+    <div class="xy-field" data-x="${x}" data-y="${y}"><div class="xy-scale">
+      <svg class="xy-grid" viewBox="0 0 100 100" aria-hidden="true">
+        <defs><pattern id="xy-dots-${x}" width="5" height="5" x="-2.5" y="-2.5" patternUnits="userSpaceOnUse">
+          <circle cx="2.5" cy="2.5" r=".24"/>
+        </pattern></defs>
+        <rect width="100" height="100" fill="url(#xy-dots-${x})"/>
+        <path class="scale-marks" d="${marks}"/>
+      </svg>
+      <span class="xy-guides" aria-hidden="true"></span>
+      <div class="xy-point" aria-hidden="true"><i></i></div>
+      ${bipolar ? yRange + xRange : xRange + yRange}
+      <output class="sound-tip xy-tip" aria-hidden="true"></output>
+    </div></div>
+  </div>`;
+}
+
+function bindXY(field) {
+  const { x, y } = field.dataset, scale = $('.xy-scale', field), point = $('.xy-point', field);
+  let drag = null;
+  const at = (key, fraction) => PARAMS[key].min + clamp(fraction, 0, 1) * (PARAMS[key].max - PARAMS[key].min);
+  const move = e => {
+    if (drag?.id !== e.pointerId) return;
+    const r = scale.getBoundingClientRect();
+    setSound({ [x]: at(x, (e.clientX - drag.dx - r.left) / r.width),
+      [y]: at(y, (r.bottom - e.clientY + drag.dy) / r.height) });
+  };
+  field.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || drag) return;
+    const hit = point.contains(e.target), r = point.getBoundingClientRect();
+    drag = { id: e.pointerId, dx: hit ? e.clientX - r.left - r.width / 2 : 0,
+      dy: hit ? e.clientY - r.top - r.height / 2 : 0 };
+    field.setPointerCapture(e.pointerId);
+    field.classList.add('is-dragging');
+    soundInput(x).focus({ preventScroll: true });
+    field.classList.add('is-pointer-focused');
+    if (!hit) move(e);
+    e.preventDefault();
+  });
+  field.addEventListener('pointermove', move);
+  field.addEventListener('lostpointercapture', () => { drag = null; field.classList.remove('is-dragging'); });
+  const endPointerFocus = () => field.classList.remove('is-pointer-focused');
+  field.addEventListener('keydown', endPointerFocus);
+  field.addEventListener('focusout', endPointerFocus);
+  field.addEventListener('dblclick', () => setSound({ [x]: PARAMS[x].def, [y]: PARAMS[y].def }, true));
+}
+
 function buildRacks() {
   const root = $('#racks');
-  RACKS.forEach((rack, i) => {
-    const el = document.createElement('div');
-    el.className = `rack rack-${rack.key} rise` + (rack.post ? ' rack-post' : '');
-    el.style.setProperty('--d', `${120 + i * 50}ms`); el.dataset.rack = rack.key;
-    el.innerHTML = `<div class="rack-head"><span class="rack-index">0${i + 1}</span><h2 class="rack-title">${rack.title}</h2><span class="spacer"></span>
-      <button class="key" type="button" data-help="${rack.key}" title="参数说明" aria-label="${rack.title} 参数说明" aria-haspopup="dialog"><svg class="i"><use href="#i-help"/></svg></button>
-      ${rack.bypass ? `<button class="key key-labeled" type="button" role="switch" data-switch="${rack.bypass}" title="开关全部后期：音色与动态、混音、成品输出" aria-label="${SWITCHES[rack.bypass]}" aria-controls="rack-tone-body rack-mix-body rack-output-body"><svg class="i"><use href="#i-power"/></svg><span>后期总开关</span></button>` : ''}
-      </div><div class="rack-body"></div>`;
-    const body = $('.rack-body', el);
-    body.id = `rack-${rack.key}-body`;
-    if (rack.groups) body.classList.add('grouped-body');
-    for (const group of rack.groups || [{ cells: rack.cells }]) {
-      let host = body;
-      if (group.title) {
-        const section = document.createElement('section'); section.className = 'control-group';
-        section.innerHTML = `<h3 class="control-group-title">${group.title}</h3><div class="control-group-cells"></div>`;
-        body.appendChild(section); host = $('.control-group-cells', section);
-      }
-      for (const key of group.cells) {
-        const cell = document.createElement('div'); cell.className = 'cell';
-        if (key.startsWith('@')) {
-          const k = key.slice(1); cell.dataset.key = k;
-          cell.innerHTML = `<button class="toggle-cell" type="button" role="switch" data-switch="${k}" aria-label="${SWITCHES[k]}" title="${SWITCHES[k]}：仅在检测到明显数字削波时修复"><svg class="i"><use href="#i-clip"/></svg></button>
-            <span class="cell-name">${SWITCHES[k]}</span><output class="cell-value" data-switch-value="${k}"></output>`;
-        } else {
-          const d = PARAMS[key]; cell.dataset.key = key;
-          const name = d.power
-            ? `<button class="cell-name" type="button" role="switch" data-switch="${d.power}" aria-label="${SWITCHES[d.power]}" title="点按开关${SWITCHES[d.power]}"><svg class="i"><use href="#i-power"/></svg>${d.name}</button>`
-            : `<span class="cell-name">${d.name}</span>`;
-          cell.innerHTML = `<div class="knob-host" aria-label="${d.label}" title="${d.label}：上下拖动、滚轮或方向键，双击复位"></div>${name}<output class="cell-value"></output>`;
-          const out = $('output', cell);
-          knobs[key] = makeKnob($('.knob-host', cell), d, P[key], v => { P[key] = v; out.textContent = d.fmt(v); store.set('param_' + key, v); changed(); });
-          out.textContent = d.fmt(P[key]);
-        }
-        host.appendChild(cell);
-      }
-    }
-    root.appendChild(el);
-  });
-  $$('[data-switch]').forEach(b => b.addEventListener('click', () => {
-    const k = b.dataset.switch; SW[k] = !SW[k]; store.set('switch_' + k, SW[k]); paint(); changed();
+  root.innerHTML = `<section class="rack" data-rack="sound" aria-labelledby="sound-title">
+    <div class="rack-head"><h2 class="rack-title" id="sound-title">声音处理</h2><span class="spacer"></span>
+      <button class="key" type="button" data-help="sound" title="声音处理说明" aria-label="声音处理说明" aria-haspopup="dialog"><svg class="i"><use href="#i-help"/></svg></button>
+      <button class="key key-labeled" type="button" role="switch" data-switch="mix_effects" title="开关美化、融合、混音" aria-controls="sound-beauty sound-fusion sound-mixdown"><svg class="i"><use href="#i-power"/></svg><span>后期总开关</span></button>
+    </div><div class="rack-body">
+      ${xyMarkup('correction', 'beauty')}${xyMarkup('ratio', 'fusion')}
+      <div class="mix-row"><label class="axis-label" for="sound-mixdown">混音</label>
+        <div class="mix-fader">
+          ${rangeMarkup('mixdown', 'mix-range')}
+          <svg class="mix-marks" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true">
+            <path class="scale-marks" d="${scaleMarks((p, major) => `M${p} 0v${major ? 7 : 4}`)}"/>
+          </svg>
+          <output class="sound-tip mix-tip" aria-hidden="true"></output>
+        </div>
+      </div>
+    </div></section>`;
+  $$('.xy-field', root).forEach(bindXY);
+  $$('[data-sound]', root).forEach(input => input.addEventListener('input', () => {
+    setSound({ [input.dataset.sound]: input.valueAsNumber });
   }));
-  $$('[data-help]').forEach(b => b.addEventListener('click', () => toggleHelp(b)));
+  const mix = soundInput('mixdown'), fader = mix.parentElement;
+  mix.addEventListener('pointermove', e => {
+    const r = mix.getBoundingClientRect(), half = $('.mix-marks', fader).getBoundingClientRect().left - r.left;
+    const center = r.left + half + (r.width - 2 * half) * soundFraction('mixdown');
+    fader.classList.toggle('is-over-thumb', Math.abs(e.clientX - center) <= half);
+  });
+  mix.addEventListener('pointerleave', () => fader.classList.remove('is-over-thumb'));
+  mix.addEventListener('dblclick', () => setSound({ mixdown: PARAMS.mixdown.def }, true));
+  $('[data-switch=mix_effects]', root).addEventListener('click', () => {
+    SW.mix_effects = !SW.mix_effects;
+    store.set('switch_mix_effects', SW.mix_effects);
+    paint(); changed();
+  });
+  $('[data-help]', root).addEventListener('click', e => toggleHelp(e.currentTarget));
 }
 
-/* 失效态：整块变淡并锁住；开关本身始终可点 */
 function paint() {
-  $$('[data-switch]').forEach(b => b.setAttribute('aria-checked', String(SW[b.dataset.switch])));
-  $$('[data-switch-value]').forEach(o => { o.textContent = SW[o.dataset.switchValue] ? '开' : '关'; });
-  $$('.rack-post .rack-body').forEach(body => {
-    body.classList.toggle('is-disabled', !SW.mix_effects); body.inert = !SW.mix_effects;
-  });
+  $('[data-switch=mix_effects]').setAttribute('aria-checked', String(SW.mix_effects));
   for (const [key, d] of Object.entries(PARAMS)) {
-    const cell = $(`.cell[data-key="${key}"]`), knob = $('.knob-wrap', cell);
-    if (d.mix) {
-      cell.inert = !SW.mix_effects;
-      cell.title = SW.mix_effects ? '' : '开启后期总开关后可用';
-    }
-    if (d.power) { cell.classList.toggle('off', !SW[d.power]); knob.inert = !SW[d.power]; }
+    const input = soundInput(key);
+    input.value = P[key];
+    input.disabled = !!d.post && !SW.mix_effects;
+    input.setAttribute('aria-valuetext', soundValue(key));
+    $(`label[for="${input.id}"]`).classList.toggle('is-disabled', input.disabled);
   }
+  for (const field of $$('.xy-field')) {
+    const { x, y } = field.dataset;
+    field.style.setProperty('--x', `${100 * soundFraction(x)}%`);
+    field.style.setProperty('--y', `${100 * (1 - soundFraction(y))}%`);
+    field.classList.toggle('is-x-only', soundInput(y).disabled);
+    field.classList.toggle('is-tip-below', soundFraction(y) > .82);
+    $('.xy-tip', field).textContent = soundInput(y).disabled ? soundValue(x) : `↔ ${soundValue(x)}  ↕ ${soundValue(y)}`;
+  }
+  const fader = soundInput('mixdown').parentElement;
+  fader.style.setProperty('--fill', `${100 * soundFraction('mixdown')}%`);
+  $('.mix-tip', fader).textContent = soundValue('mixdown');
 }
 
 /* 参数变化：已有成品时交给后台更新草稿 */
 function changed() {
-  if (state.ready && !run.busy) bridge?.draft(params());
+  if (state.ready && !run.busy && switchOn($('#live-preview'))) bridge?.draft(params());
 }
 
 /* ═══ 预设：9 槽；左键空槽保存、左键已存槽应用；右键已存槽待确认（再右键删除、左键覆盖），4 秒自动取消；不存路径 ═══ */
@@ -235,7 +297,7 @@ function renderPresets() {
 function disarm() { clearTimeout(armTimer); armed = null; renderPresets(); }
 function flashPad(n) { const pad = $(`.pad[data-slot="${n}"]`); pad.classList.remove('flash'); void pad.offsetWidth; pad.classList.add('flash'); }
 function savePreset(n) {
-  presets[n] = { savedAt: Date.now(), params: { ...P }, switches: { ...SW } };
+  presets[n] = { savedAt: Date.now(), params: { ...P }, switches: { ...SW }, legacy: { ...legacy } };
   store.set('presets', presets); flashPad(n); announce(`已保存预设 ${n}`);
 }
 function presetClick(n) {
@@ -243,10 +305,15 @@ function presetClick(n) {
   disarm();
   if (!presets[n]) { savePreset(n); renderPresets(); return; }
   const p = presets[n];
+  const old = { ...p.params, ...p.switches };
+  legacy = { ...(p.legacy ?? Object.fromEntries(legacyKeys.filter(k => k in old).map(k => [k, old[k]]))) };
+  store.set('legacy_params', legacy);
   for (const [k, d] of Object.entries(PARAMS)) {
-    if (k in p.params) { P[k] = snapTo(p.params[k], d); knobs[k].set(P[k]); store.set('param_' + k, P[k]); $(`.cell[data-key="${k}"] output`).textContent = d.fmt(P[k]); }
+    P[k] = snapTo(p.params[k] ?? d.def, d);
+    store.set('param_' + k, P[k]);
   }
-  for (const k of Object.keys(SWITCHES)) if (k in p.switches) { SW[k] = !!p.switches[k]; store.set('switch_' + k, SW[k]); }
+  SW.mix_effects = p.switches?.mix_effects !== false;
+  store.set('switch_mix_effects', SW.mix_effects);
   paint(); changed(); flashPad(n); announce(`已应用预设 ${n}`);
 }
 function presetArm(n) {
@@ -267,6 +334,11 @@ async function chooseInput(kind, path) {
   const res = path ? await call('setInput', kind, path) : await call('pickAudio', kind);
   if (!res) return;
   const { path: full, name } = JSON.parse(res);
+  if (kind === 'dry') {
+    const option = $('#dry-has-backing');
+    if (inputs.dry !== full) option.setAttribute('aria-checked', 'false');
+    option.disabled = false;
+  }
   inputs[kind] = full; setChip(kind, name); resetResult();
 }
 function setOutput(path) {
@@ -303,7 +375,7 @@ function notches(stage, kind = 'run') {
 function setBusy(on) {
   run.busy = on; const go = $('#go');
   go.classList.toggle('running', on); go.classList.remove('settled');
-  for (const el of [$('#racks'), $('#presets'), $('#out-card'), ...$$('.chip')]) el.inert = on;
+  for (const el of [$('#racks'), $('#presets'), $('#out-card'), ...$$('.chip, .dry-option')]) el.inert = on;
   $('#racks').classList.toggle('is-locked', on);
   if (on) {
     Object.assign(run, { cancelling: false, stage: 0, frac: -1, label: '准备处理', last: performance.now(), shown: 0, started: performance.now() });
@@ -313,12 +385,15 @@ function setBusy(on) {
     go.disabled = false; go.style.setProperty('--p', 0); goContent('#i-play', 'VOX!'); go.setAttribute('aria-label', '生成成品');
     fx(false);
   }
+  $('#btn-batch').disabled = on && !batch.running;
 }
 function progressFrame(now) {
   if (!run.busy) return;
-  const real = (run.stage + Math.max(0, run.frac)) / 6;
+  const part = (run.stage + Math.max(0, run.frac)) / 6;
+  const total = batch.running ? batch.jobs.length : 1, index = batch.running ? batch.index : 0;
+  const real = (index + part) / total;
   // 长时间无新进度时缓慢逼近当前阶段上界，让进度保持可见的推进
-  if (run.frac < 0 && now - run.last > 700) run.shown += ((run.stage + .92) / 6 - run.shown) * .004;
+  if (run.frac < 0 && now - run.last > 700) run.shown += ((index + (run.stage + .92) / 6) / total - run.shown) * .004;
   run.shown = Math.max(run.shown, real);
   $('#go').style.setProperty('--p', run.shown.toFixed(4));
   if (!run.cancelling) goContent('#i-stop', '停止', `${run.stage + 1}/6 · ${run.label} · ${Math.round((now - run.started) / 1000)} s`);
@@ -352,7 +427,7 @@ function onFinished(json) {
   state.ready = true; renderVersions(); renderReport(data.report, 'reveal');
   // 完成后停顿一拍再复位，防止连点误触
   setTimeout(() => { run.settling = false; go.classList.remove('settled'); setBusy(false); }, 1300);
-  for (const el of [$('#racks'), $('#presets'), $('#out-card'), ...$$('.chip')]) el.inert = false;
+  for (const el of [$('#racks'), $('#presets'), $('#out-card'), ...$$('.chip, .dry-option')]) el.inert = false;
   fx(false);
 }
 function onFailed(json) {
@@ -367,7 +442,7 @@ function onFailed(json) {
 
 /* ═══ 播放器 ═══ */
 const state = { ready: false, pos: 0, dur: 0, playing: false, sel: 2, delta: false, seeking: false };
-let versions = [], current = null, wave = null, waveMix = { from: 2, to: 2, t: 1 };
+let versions = [], current = null, wave = null;
 const loop = { a: 0, b: 0, on: false, has: false };
 const SRC_NAMES = ['修音前', '草稿', '成品'];
 
@@ -382,7 +457,10 @@ function renderPlayer() {
   for (const id of ['#p-start', '#p-play', '#p-loop', '#seek']) $(id).disabled = !ready;
   $('#p-play').setAttribute('aria-label', state.playing ? '暂停' : '播放');
   $('#p-loop').setAttribute('aria-pressed', String(loop.on));
-  $$('.src[data-src]').forEach(b => { b.disabled = !ready; b.setAttribute('aria-pressed', String(ready && +b.dataset.src === state.sel)); });
+  $$('.src[data-src]').forEach(b => {
+    b.disabled = !ready || (+b.dataset.src === 1 && !switchOn($('#live-preview')));
+    b.setAttribute('aria-pressed', String(!b.disabled && +b.dataset.src === state.sel));
+  });
   $('#p-ver-btn').disabled = !ready || versions.length < 2;
   $('#p-ver').textContent = current ? `V${current}` : '';
   const delta = $('#p-delta'); delta.disabled = !ready || state.sel === 0;
@@ -398,53 +476,55 @@ function setHead(pos) {
   $('#playhead').style.transform = `translateX(${Math.round(x)}px)`;
   $('#p-time').textContent = clock(pos, true);
   if (!state.seeking) { const seek = $('#seek'); seek.max = state.dur || 1; seek.value = pos; }
-  drawWave();
+  drawWave(pos);
 }
 function onPlayerState(json) {
   const s = JSON.parse(json), durChanged = Math.abs(s.dur - state.dur) > .01;
-  const selChanged = s.sel !== state.sel;
-  if (selChanged) { waveMix = { from: waveCurrent(), to: s.sel, t: 0 }; tween(160, t => { waveMix.t = t; drawWave(); }); }
   Object.assign(state, { pos: s.pos, dur: s.dur, playing: s.playing, sel: s.sel, delta: s.delta });
   const meter = $$('#p-meter i');
   s.levels.forEach((l, i) => meter[i].style.setProperty('--l', clamp((20 * Math.log10(Math.max(l, 1e-6)) + 48) / 48, 0, 1)));
   if (durChanged) buildRuler();
   renderPlayer();
 }
-function waveCurrent() { return waveMix.t >= 1 ? waveMix.to : waveMix.from; }
-
-/* 波形：RMS 实心 + 峰值浅色；已播放部分用强调色；切换版本 160ms 过渡 */
-function drawWave() {
-  const canvas = $('#wave'), w = canvas.clientWidth, h = canvas.clientHeight, dpr = devicePixelRatio || 1;
-  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
-  const g = canvas.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+/* 当前音源的单层波形：峰值定轮廓，均方根决定填充的深浅。 */
+function drawWave(pos = state.pos) {
+  const canvas = $('#wave'), dpr = devicePixelRatio || 1;
+  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  const g = canvas.getContext('2d'); g.clearRect(0, 0, w, h);
   const css = getComputedStyle(document.documentElement), mid = h / 2;
   g.fillStyle = css.getPropertyValue('--line'); g.fillRect(0, Math.floor(mid), w, 1);
-  if (!wave || !wave.tracks.length) return;
-  const a = wave.tracks[waveMix.from] || wave.tracks[0], b = wave.tracks[waveMix.to] || a, t = waveMix.t;
-  const bins = a.rms.length, head = state.dur ? state.pos / state.dur * w : 0, half = mid - 3;
-  const colors = { played: [css.getPropertyValue('--accent'), css.getPropertyValue('--accent-hi')],
-    rest: [css.getPropertyValue('--wave'), css.getPropertyValue('--line')] };
+  const track = wave?.tracks[state.sel]; if (!track) return;
+  const bins = track.rms.length, head = state.dur ? pos / state.dur * w : 0, half = mid - 3 * dpr;
+  const played = css.getPropertyValue('--accent'), rest = css.getPropertyValue('--wave');
+  g.fillStyle = head > 0 ? played : rest;
   for (let x = 0; x < w; x++) {
+    if (x === Math.ceil(head)) g.fillStyle = rest;
     const i0 = Math.floor(x / w * bins), i1 = Math.max(i0 + 1, Math.floor((x + 1) / w * bins));
-    let peak = 0, rms = 0;
-    for (let i = i0; i < i1 && i < bins; i++) {
-      peak = Math.max(peak, a.peak[i] * (1 - t) + b.peak[i] * t); rms = Math.max(rms, a.rms[i] * (1 - t) + b.rms[i] * t);
+    let peak = 0, power = 0, frames = 0;
+    for (let i = i0; i < i1; i++) {
+      peak = Math.max(peak, track.peak[i]);
+      const n = Math.floor((i + 1) * wave.frames / bins) - Math.floor(i * wave.frames / bins);
+      power += n * track.rms[i] ** 2;
+      frames += n;
     }
-    const [solid, faint] = x < head ? colors.played : colors.rest;
-    g.fillStyle = faint; g.fillRect(x, mid - peak * half, 1, Math.max(1, peak * half * 2));
-    g.fillStyle = solid; g.fillRect(x, mid - rms * half, 1, Math.max(1, rms * half * 2));
+    if (!peak) continue;
+    const rms = Math.sqrt(power / frames);
+    g.globalAlpha = .5 + .5 * Math.min(1, rms / peak);
+    g.fillRect(x, mid - peak * half, 1, Math.max(1, peak * half * 2));
   }
+  g.globalAlpha = 1;
 }
 function onWaveform(json) {
   const data = JSON.parse(json);
   wave = data.tracks ? data : null;
-  if (wave) { state.dur = data.duration; buildRuler(); }
+  if (wave) { state.dur = data.duration; state.sel = data.sel; buildRuler(); }
   renderPlayer();
 }
 function onWaveSegment(json) {
   const seg = JSON.parse(json), tr = wave?.tracks[seg.index]; if (!tr) return;
   seg.peak.forEach((v, i) => { tr.peak[seg.first + i] = v; tr.rms[seg.first + i] = seg.rms[i]; });
-  drawWave();
+  if (seg.index === state.sel) drawWave();
 }
 /* 时间尺：主刻度间距约 85px，主刻度间 4 个小刻度 */
 function buildRuler() {
@@ -564,6 +644,7 @@ function onVersionLoaded(json) {
 }
 function onDraftState(json) {
   const s = JSON.parse(json), player = $('#player');
+  if (!switchOn($('#live-preview')) && s.state !== 'empty') return;
   player.dataset.cache = s.state;
   if (s.state === 'error') {
     announce('草稿更新失败，可继续调整或重新生成成品');
@@ -580,6 +661,17 @@ function bindPlayer() {
   });
   $('#p-delta').addEventListener('click', () => bridge.setDelta(!state.delta));
   $$('.src[data-src]').forEach(b => b.addEventListener('click', () => bridge.select(+b.dataset.src)));
+  const livePreview = $('#live-preview');
+  livePreview.setAttribute('aria-checked', String(store.get('live_preview', true) !== false));
+  livePreview.addEventListener('click', () => {
+    const enabled = !switchOn(livePreview);
+    livePreview.setAttribute('aria-checked', String(enabled));
+    store.set('live_preview', enabled);
+    bridge?.setLivePreview(enabled);
+    if (enabled) changed();
+    else onDraftState('{"state":"empty"}');
+    renderPlayer();
+  });
   const seek = $('#seek');
   seek.addEventListener('input', () => { state.seeking = true; setHead(+seek.value); });
   seek.addEventListener('change', () => {
@@ -595,9 +687,9 @@ function bindPlayer() {
   });
   track.addEventListener('pointerleave', () => { tip?.remove(); tip = null; });
   makeKnob($('#p-volume'), { min: 0, max: 100, step: 5, def: 100, fmt: pct }, 100, v => bridge.setVolume(v / 100));
-  // 全局空格播放 / 暂停（输入框除外，忽略按键重复）
+  // 全局空格播放 / 暂停，保留开关和输入框自身的键盘操作。
   window.addEventListener('keydown', e => {
-    if (e.code !== 'Space' || e.repeat || e.target.closest('input, textarea, .modal:not([hidden])')) return;
+    if (e.code !== 'Space' || e.repeat || e.target.closest('input, textarea, [role="switch"], .modal:not([hidden])')) return;
     if (!state.ready) return;
     e.preventDefault(); bridge.toggle();
   }, true);
@@ -623,7 +715,7 @@ function renderReport(r, mode = 'none') {
     }
   }
   const poster = $('#rp-poster'); poster.dataset.transition = RM.matches ? 'none' : mode;
-  poster.innerHTML = ShadowReport.svg(r);
+  poster.innerHTML = ShadowReport.svg(r, true);
 }
 function drawReport() { /* SVG 按容器缩放，不在窗口缩放时重建图表或抢走焦点。 */ }
 function reportSeek(seconds) {
@@ -667,7 +759,8 @@ function openModal(m, trigger) {
   m._trigger = trigger || document.activeElement; m.hidden = false; openModals.push(m);
   for (const el of [$('.topbar'), $('#content'), $('#dock'), $('#help')]) el.inert = true;
   requestAnimationFrame(() => requestAnimationFrame(() => m.classList.add('open')));
-  setTimeout(() => ($('input', m) || $('.modal-foot .key-primary', m) || $('[data-close]:not(.modal-backdrop)', m))?.focus(), 30);
+  setTimeout(() => ($('[data-initial-focus]:not(:disabled)', m) || $('input', m) ||
+    $('.modal-foot .key-primary:not(:disabled)', m) || $('[data-close]:not(.modal-backdrop)', m))?.focus(), 30);
 }
 function closeModal(m) {
   if (m.hidden || !m.classList.contains('open') && openModals.indexOf(m) < 0) return;
@@ -721,10 +814,9 @@ function toggleHelp(btn) {
   const help = $('#help'), key = btn.dataset.help;
   if (!help.hidden && helpKey === key) { closeHelp(); return; }
   helpKey = key; help._trigger = btn;
-  const rack = RACKS.find(r => r.key === key);
-  $('#help-title').textContent = `${rack.title} · 参数说明`;
+  $('#help-title').textContent = '声音处理说明';
   $('#help-body').innerHTML = '<dl></dl><p class="note"></p>';
-  for (const [k, v] of HELP[key]) { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; $('#help-body dl').append(dt, dd); }
+  for (const [k, v] of HELP) { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; $('#help-body dl').append(dt, dd); }
   $('#help-body .note').textContent = AUDITION;
   if (help.hidden) {
     help.hidden = false;
@@ -768,11 +860,58 @@ function renderVst(json) {
     open.addEventListener('click', () => bridge.vstOpen(i)); li.appendChild(open); list.appendChild(li);
   });
 }
+function syncTheme() {
+  $$('[data-scheme-choice]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.schemeChoice === theme.mode)));
+  $$('[data-palette-choice]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.paletteChoice === theme.palette)));
+  $('.theme-custom').dataset.active = theme.palette === 'custom';
+  bridge?.setNativeTheme(theme.mode, theme.mode === 'dark' ? '#17131b' : '#fffafb');
+  drawWave();
+}
+
+function onUpdateInfo(json) {
+  const { state: result, current, latest } = JSON.parse(json);
+  const messages = {
+    current: '已是最新正式版 V' + current,
+    ahead: '当前 V' + current + '，公开正式版 V' + latest,
+    newer: '发现 V' + latest + '，当前 V' + current,
+    unavailable: '目前没有可访问的正式版本',
+    limited: 'GitHub 暂时限制请求，请稍后重试',
+    error: '无法检查更新，请检查网络后重试',
+  };
+  $('#update-status').textContent = messages[result];
+  $('#check-update').disabled = false;
+  $('#open-update').hidden = result !== 'newer';
+}
+
 function bindSettings() {
+  const swatches = $('#theme-swatches'), picker = $('#theme-custom');
+  for (const [id, [label, color]] of Object.entries(theme.palettes)) {
+    const button = document.createElement('button');
+    button.className = 'key theme-swatch'; button.type = 'button';
+    button.title = label; button.setAttribute('aria-label', label);
+    button.dataset.paletteChoice = id; button.style.setProperty('--swatch', color);
+    button.addEventListener('click', () => theme.apply(theme.mode, id));
+    swatches.insertBefore(button, picker.parentElement);
+  }
+  picker.value = theme.custom;
+  picker.addEventListener('input', () => theme.apply(theme.mode, 'custom', picker.value));
+  $$('[data-scheme-choice]').forEach(button => button.addEventListener('click', () => theme.apply(button.dataset.schemeChoice, theme.palette)));
+  document.addEventListener('shadowvox-theme', syncTheme);
+  syncTheme();
+  $('#check-update').addEventListener('click', () => {
+    $('#open-update').hidden = true;
+    if (!bridge) { $('#update-status').textContent = '请在桌面应用中检查更新'; return; }
+    $('#check-update').disabled = true; $('#update-status').textContent = '正在检查…';
+    bridge.checkUpdate();
+  });
+  $('#open-update').addEventListener('click', () => bridge?.openUpdatePage());
   $('#btn-settings').addEventListener('click', async () => {
     openModal($('#settings'), $('#btn-settings'));
-    $('#set-version').textContent = await call('appVersion');
-    renderVst(await call('vstList')); refreshCache();
+    if (bridge) {
+      $('#set-version').textContent = await call('appVersion');
+      $('#set-author').textContent = await call('appAuthor');
+      renderVst(await call('vstList')); refreshCache();
+    }
   });
   const clear = $('#set-cache-clear'); let confirmTimer = 0;
   clear.addEventListener('click', async () => {
@@ -792,11 +931,138 @@ function onVstStatus(json) {
   $$('#vst-list .key').forEach(b => { b.disabled = s.busy; });
 }
 
-/* 拖入：落在原曲 / 干音框则替换该项，落在输出目录上则设为输出目录 */
+/* 批处理队列与单文件播放器分别保存状态。 */
+const batch = { jobs: [], reference: '', running: false, index: 0 };
+const fileName = path => path.split(/[\\/]/).pop();
+
+function batchButton(label, action, disabled = false) {
+  const button = document.createElement('button');
+  button.className = 'key key-labeled'; button.type = 'button';
+  button.textContent = label; button.disabled = disabled;
+  button.addEventListener('click', action);
+  return button;
+}
+
+function renderBatch() {
+  const list = $('#batch-list'), locked = batch.running || run.busy;
+  list.replaceChildren();
+  for (const job of batch.jobs) {
+    const row = document.createElement('li');
+    row.dataset.state = job.state;
+    const info = document.createElement('div');
+    info.innerHTML = '<strong class="batch-name"></strong><span class="set-desc"></span><span class="set-desc batch-detail"></span>';
+    $('.batch-name', info).textContent = fileName(job.dry);
+    info.title = job.dry;
+    $('.set-desc', info).textContent = job.song ? '原曲 · ' + fileName(job.song) : '请选择原曲';
+    $('.batch-detail', info).textContent = job.error || (job.output && fileName(job.output)) ||
+      ({ running: '处理中', cancelled: '已停止', pending: '等待处理' }[job.state] ?? '');
+    if (job.error) $('.batch-detail', info).title = job.error;
+    const actions = document.createElement('div'); actions.className = 'set-line';
+    actions.append(batchButton('换原曲', async () => {
+      const [song] = JSON.parse(await call('pickBatchFiles', 'song') || '[]');
+      if (song) { Object.assign(job, { song, state: 'pending', error: '', output: '', html: '' }); renderBatch(); }
+    }, locked));
+    const backing = batchButton('含伴奏', () => {
+      job.dry_has_backing = !job.dry_has_backing;
+      backing.setAttribute('aria-checked', String(job.dry_has_backing));
+    }, locked);
+    backing.setAttribute('role', 'switch'); backing.setAttribute('aria-checked', String(job.dry_has_backing));
+    actions.append(backing);
+    if (job.html) actions.append(batchButton('报告', () => bridge.openBatchReport(job.html), batch.running));
+    actions.append(batchButton('移除', () => { batch.jobs.splice(batch.jobs.indexOf(job), 1); renderBatch(); }, locked));
+    row.append(info, actions); list.append(row);
+  }
+  const count = batch.jobs.length;
+  $('#batch-button-label').textContent = count ? '批处理 · ' + count : '批处理';
+  $('#batch-add').disabled = locked;
+  $('#batch-clear').disabled = locked || !count;
+  $('#batch-reference').disabled = locked || !count;
+  $('#batch-start').disabled = batch.running ? run.cancelling : locked || !count;
+  $('#batch-start').textContent = batch.running ? (run.cancelling ? '停止中…' : '停止批处理') : '开始批处理';
+}
+
+function addBatchFiles(paths) {
+  if (run.busy || batch.running) return;
+  for (const dry of paths) {
+    if (!batch.jobs.some(job => job.dry === dry)) {
+      batch.jobs.push({ dry, song: batch.reference || inputs.song, state: 'pending', dry_has_backing: false });
+    }
+  }
+  renderBatch();
+}
+
+function openBatch() {
+  if (run.busy && !batch.running) return;
+  if ($('#batch-dialog').hidden) openModal($('#batch-dialog'), $('#btn-batch'));
+  renderBatch();
+}
+
+function onBatchItem(json) {
+  const item = JSON.parse(json);
+  Object.assign(batch.jobs[item.index], item);
+  if (item.state === 'running') {
+    batch.index = item.index;
+    Object.assign(run, { stage: 0, frac: -1, label: fileName(batch.jobs[item.index].dry), last: performance.now() });
+    notches(0);
+  }
+  $('#batch-status').textContent = '处理 ' + (item.index + 1) + ' / ' + batch.jobs.length;
+  renderBatch();
+}
+
+function onBatchDone(json) {
+  const data = JSON.parse(json);
+  batch.running = false;
+  setBusy(false);
+  const success = data.results.filter(item => item.state === 'done').length;
+  const failures = data.results.filter(item => item.state === 'error').length;
+  const prefix = data.cancelled ? '批处理已停止。' : '批处理完成。';
+  $('#batch-status').textContent = prefix + '成功 ' + success + ' 项，失败 ' + failures + ' 项。';
+  announce($('#batch-status').textContent);
+  renderBatch();
+}
+
+function bindBatch() {
+  $('#btn-batch').addEventListener('click', openBatch);
+  $('#batch-add').addEventListener('click', async () => addBatchFiles(JSON.parse(await call('pickBatchFiles', 'dry') || '[]')));
+  $('#batch-clear').addEventListener('click', () => {
+    batch.jobs = []; batch.reference = ''; $('#batch-status').textContent = ''; renderBatch();
+  });
+  $('#batch-reference').addEventListener('click', async () => {
+    const [song] = JSON.parse(await call('pickBatchFiles', 'song') || '[]');
+    if (!song) return;
+    batch.reference = song;
+    for (const job of batch.jobs) Object.assign(job, { song, state: 'pending', error: '', output: '', html: '' });
+    renderBatch();
+  });
+  $('#batch-start').addEventListener('click', async () => {
+    if (batch.running) { onGo(); renderBatch(); return; }
+    if (run.busy || run.settling) return;
+    const status = $('#batch-status'), out = store.get('output', '');
+    if (!batch.jobs.length || batch.jobs.some(job => !job.song)) { status.textContent = '请为每条任务指定原曲。'; return; }
+    if (!out || !(await call('folderExists', out))) { status.textContent = '请先在工作台选择输出目录。'; return; }
+    if (run.busy || batch.running) return;
+    batch.running = true; batch.index = 0;
+    for (const job of batch.jobs) Object.assign(job, { state: 'pending', error: '', output: '', html: '' });
+    setBusy(true); status.textContent = '准备处理…'; renderBatch();
+    const jobs = batch.jobs.map(({ dry, song, dry_has_backing }) => ({ dry, song, dry_has_backing }));
+    if (!(await call('processBatch', jobs, { ...params(), output: out }))) {
+      batch.running = false; setBusy(false); status.textContent = '当前无法启动批处理。';
+      renderBatch();
+    }
+  });
+  renderBatch();
+}
+
+/* 多个干音进入队列，单个文件保留原来的快速入口。 */
 function onDrop(json) {
   const { paths, x, y } = JSON.parse(json), el = document.elementFromPoint(x, y);
   if (run.busy) { announce('处理中不能更换文件'); return; }
-  const chip = el?.closest('.chip'), audio = paths.find(p => /\.(wav|mp3|flac|m4a|aac|ogg|aiff|wma)$/i.test(p));
+  const chip = el?.closest('.chip') || el?.closest('.dry-input')?.querySelector('.chip');
+  const audioPaths = paths.filter(p => /\.(wav|mp3|flac|m4a|aac|ogg|aiff|wma)$/i.test(p));
+  if (audioPaths.length && (el?.closest('#batch-dialog, #btn-batch') || (chip?.dataset.kind === 'dry' && audioPaths.length > 1))) {
+    addBatchFiles(audioPaths); openBatch(); return;
+  }
+  const audio = audioPaths[0];
   if (chip && audio) { chooseInput(chip.dataset.kind, audio); return; }
   if (el?.closest('#out-card')) {
     const dir = paths.find(p => !/\.[a-z0-9]{2,4}$/i.test(p));
@@ -818,15 +1084,19 @@ function fxFrame(now) {
   if (canvas.width !== w * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
   const g = canvas.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
   const band = g.createLinearGradient(0, h, 0, h * .6), a = .07 + .04 * Math.sin(now / 700);
-  band.addColorStop(0, `rgba(181,47,104,${a})`); band.addColorStop(1, 'rgba(181,47,104,0)');
+  const colors = getComputedStyle(document.documentElement);
+  const accent = colors.getPropertyValue('--accent'), accentHi = colors.getPropertyValue('--accent-hi');
+  band.addColorStop(0, 'color-mix(in srgb,' + accent + ' ' + a * 100 + '%, transparent)');
+  band.addColorStop(1, 'transparent');
   g.fillStyle = band; g.fillRect(0, h * .6, w, h * .4);
   if (fxState.on && fxState.parts.length < 36 && Math.random() < .3)
     fxState.parts.push({ x: Math.random() * w, y: h + 6, s: 2 + Math.random() * 3, v: .25 + Math.random() * .5, life: 0, max: 4 + Math.random() * 4, hue: Math.random() < .5 });
   fxState.parts = fxState.parts.filter(p => (p.life += 1 / 60) < p.max);
   for (const p of fxState.parts) {
     p.y -= p.v; const alpha = Math.sin(Math.PI * p.life / p.max) * .28;
-    g.fillStyle = p.hue ? `rgba(181,47,104,${alpha})` : `rgba(208,88,139,${alpha})`; g.fillRect(p.x, p.y, p.s, p.s);
+    g.globalAlpha = alpha; g.fillStyle = p.hue ? accent : accentHi; g.fillRect(p.x, p.y, p.s, p.s);
   }
+  g.globalAlpha = 1;
   // 淡出过渡结束后才停止绘制
   if (!fxState.on && (canvas._off ??= now) && now - canvas._off > 450) { fxState.raf = 0; fxState.parts = []; canvas._off = undefined; g.clearRect(0, 0, w, h); return; }
   if (fxState.on) canvas._off = undefined;
@@ -834,7 +1104,10 @@ function fxFrame(now) {
 }
 
 /* 独立 EXE 验收读取界面状态 */
-window.__svState = () => ({ strength: P.strength, mix_enabled: SW.mix_effects, rhythm_enabled: SW.rhythm,
+window.__svState = () => ({ correction: P.correction,
+  sound_values: { ...P },
+  strength: params().strength ?? Math.min(1.5*P.correction,50+.5*P.correction),
+  mix_enabled: SW.mix_effects, rhythm_enabled: params().rhythm ?? P.correction > 0,
   busy: run.busy, ready: state.ready, tab: $('#tab-report').getAttribute('aria-pressed') === 'true' ? 'report' : 'process' });
 
 /* ═══ 启动 ═══ */
@@ -842,6 +1115,11 @@ function init() {
   buildRacks(); buildPresets(); paint();
   setChip('song', ''); setChip('dry', ''); setOutput(store.get('output', ''));
   $$('.chip').forEach(chip => { chip.addEventListener('click', () => chooseInput(chip.dataset.kind)); bindMarquee(chip); });
+  $('#dry-has-backing').addEventListener('click', ({ currentTarget }) => {
+    currentTarget.setAttribute('aria-checked', String(!switchOn(currentTarget)));
+    bridge?.invalidate();
+    resetResult();
+  });
   $('#out-card').addEventListener('click', async () => { const p = await call('pickOutput', store.get('output', '')); if (p) setOutput(p); });
   $('#go').addEventListener('click', onGo);
   $('#tab-process').addEventListener('click', () => switchTab('process'));
@@ -852,16 +1130,21 @@ function init() {
   $('#rp-poster').addEventListener('click', event => {
     const target = event.target.closest('[data-seek]'); if (target) reportSeek(+target.dataset.seek);
   });
-  bindPlayer(); bindModals(); bindHelp(); bindSettings();
+  bindPlayer(); bindModals(); bindHelp(); bindSettings(); bindBatch();
   renderPlayer(); renderReport(null, 'none');
   requestAnimationFrame(() => moveGlider($('.tabs'), $('#tab-process'), '.tab-glider'));
   addEventListener('resize', () => { buildRuler(); renderPlayer(); drawReport(reportView, null, 1, 1); moveGlider($('.tabs'), $('.tab[aria-pressed="true"]'), '.tab-glider'); });
 }
 init();
-new QWebChannel(qt.webChannelTransport, channel => {
-  bridge = channel.objects.bridge;
-  bridge.stage.connect(onStage); bridge.finished.connect(onFinished); bridge.failed.connect(onFailed);
-  bridge.playerState.connect(onPlayerState); bridge.waveform.connect(onWaveform); bridge.waveformSegment.connect(onWaveSegment);
-  bridge.draftState.connect(onDraftState); bridge.versionLoaded.connect(onVersionLoaded);
-  bridge.filesDropped.connect(onDrop); bridge.vstStatus.connect(onVstStatus);
-});
+if (window.qt?.webChannelTransport) {
+  new QWebChannel(window.qt.webChannelTransport, channel => {
+    bridge = channel.objects.bridge;
+    bridge.stage.connect(onStage); bridge.finished.connect(onFinished); bridge.failed.connect(onFailed);
+    bridge.playerState.connect(onPlayerState); bridge.waveform.connect(onWaveform); bridge.waveformSegment.connect(onWaveSegment);
+    bridge.draftState.connect(onDraftState); bridge.versionLoaded.connect(onVersionLoaded);
+    bridge.filesDropped.connect(onDrop); bridge.vstStatus.connect(onVstStatus);
+    bridge.updateInfo.connect(onUpdateInfo); bridge.batchItem.connect(onBatchItem); bridge.batchDone.connect(onBatchDone);
+    syncTheme();
+    bridge.setLivePreview(switchOn($('#live-preview')));
+  });
+}

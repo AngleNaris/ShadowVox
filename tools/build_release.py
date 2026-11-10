@@ -50,6 +50,9 @@ def main():
         'fcpe.onnx', 'Kim_Vocal_2.onnx', 'whisper-base.pt',
         'hifigan_pkg/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx')]
     external += [ROOT/'tools/vendor/deepfilternet/shadowvox-denoise.exe']
+    external += [ROOT/'plugins/ZL Compressor.vst3/Contents/x86_64-win/ZL Compressor.vst3',
+                 ROOT/'plugins/ZL Limiter.vst3/Contents/x86_64-win/ZL Limiter.vst3',
+                 ROOT/'plugins/ZL-AGPL-3.0.txt']
     external += sorted(p for p in (ROOT/'models/hubertfa').iterdir() if p.is_file())
     rubberband = ROOT/'tools/vendor/rubberband-4.0.0/rubberband-4.0.0-gpl-executable-windows'
     external += [rubberband/'rubberband.exe', rubberband/'sndfile.dll']

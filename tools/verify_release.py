@@ -16,7 +16,7 @@ from PyInstaller.utils.win32.versioninfo import read_version_info_from_executabl
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src'))
-from shadowvox import __version__, pipeline
+from shadowvox import AUTHOR, __version__, mixing, pipeline
 from shadowvox.reporting import build
 
 
@@ -35,7 +35,8 @@ def check_archive(executable):
     modules = package.open_embedded_archive('PYZ.pyz')
     checked = []
     for name in ('__init__', 'align', 'hubert_alignment', 'full_align', 'lyric_anchors', 'pipeline', 'live_preview', 'psola',
-                 'mixing', 'vocal_body', 'gui', 'gui_bridge', 'reporting', 'report_analysis', 'denoise'):
+                 'separate', 'vocal_gate', 'jobs', 'updates',
+                 'mixing', 'density', 'mastering', 'vst_worker', 'gui', 'gui_bridge', 'reporting', 'report_analysis', 'denoise'):
         path = ROOT/'src/shadowvox'/f'{name}.py'
         key = 'shadowvox' if name == '__init__' else f'shadowvox.{name}'
         assert normalize(modules.extract(key)) == normalize(compile(path.read_bytes(), str(path), 'exec')), key
@@ -55,11 +56,16 @@ def check_archive(executable):
             assert hashlib.sha256(package.extract(key)).hexdigest() == digest(path), key
             model_files.append(key)
     assert 'models\\hubertfa\\model.onnx' in model_files
+    for name in ('Compressor', 'Limiter'):
+        zl = f'plugins\\ZL {name}.vst3\\Contents\\x86_64-win\\ZL {name}.vst3'
+        assert hashlib.sha256(package.extract(zl)).hexdigest() == digest(ROOT/zl)
+    assert 'licenses\\zl-compressor\\ZL-AGPL-3.0.txt' in package.toc
     for key in ('bin\\ffmpeg.exe','bin\\rubberband.exe','bin\\sndfile.dll',
                 'models\\whisper-base.pt','models\\fcpe.onnx','models\\Kim_Vocal_2.onnx'):
         assert key in package.toc, key
     info = read_version_info_from_executable(str(executable))
     assert __version__ in str(info), 'Windows 版本属性不一致'
+    assert AUTHOR in str(info), 'Windows 作者署名不一致'
     manifest = json.loads(executable.with_suffix('.release.json').read_text(encoding='utf-8'))
     assert manifest['version'] == __version__ and manifest['executable']['sha256'] == digest(executable)
     return dict(modules=checked, assets=assets, model_files=model_files, denoise_helper_matches=True, windows_version=__version__)
@@ -76,6 +82,9 @@ def main():
     folder.mkdir(parents=True, exist_ok=True)
     result = dict(version=__version__, archive=check_archive(executable))
     request = json.loads(args.request.read_text(encoding='utf-8'))
+    request.setdefault('master_density',1.)
+    request.setdefault('fixed_master',True)
+    request.setdefault('mute_reference_gaps',True)
     if args.source_report:
         source = json.loads(args.source_report.read_text(encoding='utf-8'))
         source_report = args.source_report.resolve()
@@ -89,7 +98,9 @@ def main():
             source = pipeline.run(request['dry'], request['song'], output, work_dir=request.get('work'),
                 opts=pipeline.Options(strength=request.get('strength', .75), pitch_mode='register',
                     max_shift_cents=450, mix_effects=request.get('mix_effects', True), comparison=True,
-                    renderer='psola', rhythm_mode='full', reuse_stems=request.get('reuse_stems', True)),
+                    renderer='psola', rhythm_mode='full', master_density=request['master_density'], fixed_master=request['fixed_master'],
+                    reuse_stems=request.get('reuse_stems', True), mute_reference_gaps=request['mute_reference_gaps'],
+                    dry_has_backing=request.get('dry_has_backing', False)),
                 capture=capture, log=emit)
         source['audio_analysis'] = build(source, source['comparison_before'], output, capture=capture)
         source_report = output.with_suffix('.report.json')
@@ -115,7 +126,12 @@ def main():
     assert process.returncode == 0, (folder/'frozen.log').read_text(encoding='utf-8')
     frozen = json.loads((folder/'frozen.report.json').read_text(encoding='utf-8'))
     assert frozen['app_version'] == __version__
-    assert frozen['mixing']['mix_preset'] == 'B_light_third'
+    assert frozen['mixing']['mix_preset'] == mixing.MIX_PRESET
+    if request['master_density']:
+        assert frozen['mixing']['density']['applied']
+    if request['fixed_master']:
+        assert frozen['mixing']['readback_verified'] and frozen['mixing']['measured_output_true_peak_dbtp'] <= -.5
+        assert frozen['mixing']['target_reached']
     rhythm = frozen['rhythm']
     assert rhythm['algorithm'] == 'hubertfa-zh+rubberband-r3-v1'
     assert rhythm['language'] == 'zh' and rhythm['lyric_anchors'] > 0
@@ -140,6 +156,7 @@ def main():
     assert process.returncode == 0
     state = json.loads((gui/'frozen-gui.json').read_text(encoding='utf-8'))
     assert state['app_version'] == __version__ and state['visible'] and state['report_png']
+    assert state['sound_values'] == dict(correction=50, beauty=50, fusion=50, ratio=0, mixdown=100)
     assert state['report_summary_rows'] >= 8
     assert (ROOT/'src/shadowvox/ui/report.js').read_text(encoding='utf-8') in (gui/'frozen-report.html').read_text(encoding='utf-8')
     result['gui'] = state

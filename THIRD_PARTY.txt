@@ -26,8 +26,12 @@ ShadowVox 桌面版依赖与模型说明（原名 Atune）
   LGPL-3.0 / GPL 许可选项，内含 Chromium，其各组件许可（BSD 等）随 Qt WebEngine 分发；动态库与 QtWebEngineProcess 原样打包，
   包内 licenses/PySide6-Addons、licenses/PySide6-WebEngine 保留随包许可文件。源码 https://code.qt.io/cgit/qt/qtwebengine.git/
 - ONNX Runtime：MIT；https://github.com/microsoft/onnxruntime
-- Pedalboard：GPL-3.0；内置 Freeverb 混响用于音频处理，也用于载入 VST3 和打开原界面；载入的 VST3 不处理音频。
+- Pedalboard：GPL-3.0；用于 Freeverb、ZL Compressor 宿主和 VST3 编辑器。
   https://github.com/spotify/pedalboard ，原始 LICENSE 和 NOTICE 随包收集。
+- ZL Compressor 0.6.1：AGPL-3.0；用于成品的四段 Optical 密度压缩。许可位于 licenses/zl-compressor。
+  对应源码与版本 https://github.com/ZL-Audio/ZLCompressor/releases/tag/0.6.1
+- ZL Limiter 0.0.1：AGPL-3.0；用于 C+ 成品真峰值限幅。许可位于 licenses/zl-compressor。
+  对应源码与版本 https://github.com/ZL-Audio/ZLLimiter/releases/tag/0.0.1
 - NumPy：BSD；https://github.com/numpy/numpy
 - SciPy：BSD；https://github.com/scipy/scipy
 - SoundFile：BSD，内含 libsndfile LGPL；https://github.com/bastibe/python-soundfile
@@ -35,7 +39,7 @@ ShadowVox 桌面版依赖与模型说明（原名 Atune）
   https://github.com/spatialaudio/python-sounddevice ，https://github.com/PortAudio/portaudio
 - FFmpeg：本机 Gyan full build，原始 LICENSE 已内置，具体构建配置由 ffmpeg -version 查看。
   源码 https://ffmpeg.org/download.html ，构建来源 https://www.gyan.dev/ffmpeg/builds/
-- Praat / Parselmouth：GPL-3.0；桌面版用其 TD-PSOLA 在原始人声上移调（默认渲染器）；混音增厚使用其低八度重合成和人声周期标记。
+- Praat / Parselmouth：GPL-3.0；桌面版用其 TD-PSOLA 在原始人声上移调（默认渲染器）。
   分发含该组件的 EXE 须遵守 GPL-3.0（提供对应源码）。https://github.com/YannickJadoul/Parselmouth
 - Rubber Band 4.0.0 官方命令行（含 libsndfile）：GPL-2.0-or-later；用于整句节奏对齐的变速。
   以独立程序 bin/rubberband.exe 随附，COPYING 在 licenses/rubberband。https://breakfastquay.com/rubberband/

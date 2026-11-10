@@ -75,12 +75,28 @@ class StudioWindow(QMainWindow):
         settings = self.view.settings()
         settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
         self.bridge = Bridge(self)
+        self.bridge.nativeTheme.connect(self.apply_theme)
         self.channel = QWebChannel(self.view); self.channel.registerObject('bridge', self.bridge)
         self.view.page().setWebChannel(self.channel)
         self.view.dropped.connect(lambda paths, x, y: self.bridge.filesDropped.emit(
             json.dumps(dict(paths=paths, x=x, y=y), ensure_ascii=False)))
         self.setCentralWidget(self.view)
         self.view.load(QUrl.fromLocalFile(str(UI_INDEX)))
+
+    def apply_theme(self, mode, background):
+        color = QColor(background)
+        if not color.isValid() or mode not in ('dark', 'light'):
+            return
+        palette = self.palette()
+        palette.setColor(QPalette.Window, color)
+        self.setPalette(palette)
+        self.view.page().setBackgroundColor(color)
+        if sys.platform == 'win32':
+            from ctypes import byref, c_int, c_void_p, windll
+            enabled = c_int(mode == 'dark')
+            window = c_void_p(int(self.winId()))
+            if windll.dwmapi.DwmSetWindowAttribute(window, 20, byref(enabled), 4):
+                windll.dwmapi.DwmSetWindowAttribute(window, 19, byref(enabled), 4)
 
     def restore_geometry(self):
         override = os.environ.get('SHADOWVOX_WINDOW', '')
@@ -171,8 +187,8 @@ def run_check(window, app, folder):
             from .preview import prepare as load
             data = json.loads(request.read_text(encoding='utf-8'))
             for key in ('song', 'dry'): bridge.inputs[key] = data[key]
-            tracks, sr, _ = load(data['before'], data['after'])
-            bridge.load_tracks(0, tracks, sr, select=2)
+            tracks, sr, stats = load(data['before'], data['after'])
+            bridge.load_tracks(0, tracks, sr, stats['gains_db'], select=2)
             bridge.setVolume(.02); bridge.seek(64.); bridge.toggle()
             QTimer.singleShot(250, lambda: bridge.select(0))
             QTimer.singleShot(800, check_report)

@@ -2,16 +2,17 @@
 import hashlib
 import json
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 
 from . import __version__, audio, config as C
 from .align import estimate_shift, apply_shift
 from . import rhythm
 from .f0 import FcpeExtractor
-from .separate import separate_song, DEFAULT_MODEL
+from .separate import separate_song, isolate_dry, DEFAULT_MODEL
 from .vocoder import Vocoder
 
 
@@ -21,6 +22,7 @@ class Options:
     max_shift_cents: float = 700.0  # 单帧最大移调
     smooth_ms: float = 0.0          # frame 模式平滑窗；0=逐帧跟随，不代表自然度最佳
     pitch_mode: str = "frame"       # natural 为保留音符内形状的实验模式
+    register_detail: float = 0.0    # 高档缩短音高中心窗口，覆盖可信短音
     vocal_gain_db: float = 0.0      # 修后干声相对原唱响度的额外增益
     octave: str = "auto"            # auto=折叠到干声自身音区 | match=跟原唱同音区（可整体升降八度）
     rhythm: bool = True             # 入点级节奏对齐（跟原唱对齐，只修入点，不逐字硬贴）
@@ -42,11 +44,16 @@ class Options:
     mix_eq: float = 1.0
     mix_compression: float = 1.0
     mix_deess: float = 1.0
+    mix_harmonics: float = 1.0
     mix_reverb: float = 1.0
     mix_delay: float = 1.0
     mix_duck: float = 1.0
     target_lufs: float = -16.0
     true_peak_ceiling: float = -1.5
+    master_density: float | None = None
+    dry_has_backing: bool = False
+    mute_reference_gaps: bool = False
+    fixed_master: bool = False
 
 
 def _detect_octave(dry_f0, ref_f0, move_seconds):
@@ -99,8 +106,9 @@ def _load_or_separate(song_path, work_dir, model, reuse, log):
         song = audio.load(song_path, sr=C.VOC_SR, channels=2)[0]
         n = min(song.shape[1], len(vocal))
         inst = song[:, :n] - np.vstack([vocal[:n], vocal[:n]])
-    audio.save(vpath, vocal, C.VOC_SR)
-    audio.save(ipath, inst, C.VOC_SR)
+    # Keep the same samples for the first job and later jobs reusing this reference.
+    sf.write(vpath, vocal, C.VOC_SR, subtype='FLOAT')
+    sf.write(ipath, inst.T, C.VOC_SR, subtype='FLOAT')
     log(f"[分离] 完成 {time.time() - t0:.1f}s")
     return vocal, inst
 
@@ -128,6 +136,9 @@ def _stems_ok(vocal, inst, song_path):
 
 def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print, capture=None):
     opts = opts or Options()
+    if opts.fixed_master:
+        from .mastering import TARGET_LUFS, TRUE_PEAK_CEILING
+        opts = replace(opts, target_lufs=TARGET_LUFS, true_peak_ceiling=TRUE_PEAK_CEILING)
     dry_path, song_path = Path(dry_path), Path(song_path)
     out_path = Path(out_path) if out_path else C.OUT_DIR / f"{dry_path.stem}_autotuned.wav"
     work_dir = Path(work_dir) if work_dir else C.WORK_DIR / song_path.stem
@@ -150,6 +161,11 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
     log("[1/6] 读取干声")
     dry = audio.load_mono(dry_path, C.VOC_SR)
     original_dry = dry.copy() if opts.comparison else None
+    report["dry_separation"] = {"enabled":False}
+    if opts.dry_has_backing:
+        log('[干声分离] 从输入录音提取演唱人声')
+        dry, cached = isolate_dry(dry_path,work_dir,len(dry),opts.reuse_stems,log)
+        report["dry_separation"] = {"enabled":True,"model":DEFAULT_MODEL,"cache_hit":cached}
     if capture is not None:
         capture['dry_input'] = dry.copy()
     report["dry_seconds"] = round(len(dry) / C.VOC_SR, 2)
@@ -188,6 +204,11 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
     fcpe = FcpeExtractor()
     dry_f0 = fcpe.extract(dry, C.VOC_SR)
     ref_f0 = fcpe.extract(ref_vocal, C.VOC_SR)
+    if opts.mute_reference_gaps or capture is not None:
+        from .vocal_gate import reference_intervals
+        singing_intervals = reference_intervals(ref_vocal,ref_f0,C.VOC_SR)
+        if capture is not None:
+            capture['reference_singing'] = singing_intervals
     if capture is not None:
         capture['input_f0'] = dry_f0.copy()
     report["dry_voiced_ratio"] = round(float((dry_f0 > 0).mean()), 3)
@@ -199,13 +220,17 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
     onset_offset = 0.0
     before_move = None
     pitch_reference = {}
-    if opts.rhythm and opts.rhythm_strength and opts.rhythm_mode == "full":
+    reference_shift = 0.
+    rhythm_amount = opts.rhythm_strength if opts.rhythm else 0.
+    chinese_pitch = opts.alignment_backend == 'hubertfa_zh' and opts.strength and opts.pitch_mode == 'register'
+    if opts.rhythm_mode == "full" and (rhythm_amount or chinese_pitch):
         from .full_align import align, pitch_mapping
         alignment_capture = capture if capture is not None else {}
-        log('[节奏] 整句对齐到原唱')
+        log('[节奏] 建立原唱对应')
         dry, rstat = align(dry, ref_vocal, C.VOC_SR, log=log,
-                           strength=opts.rhythm_strength, capture=alignment_capture,
-                           max_rate=opts.rhythm_max_rate, backend=opts.alignment_backend)
+                           strength=rhythm_amount, capture=alignment_capture,
+                           max_rate=opts.rhythm_max_rate, backend=opts.alignment_backend,
+                           offset_hint=-rhythm.onset_offset(dry_f0,ref_f0) if opts.alignment_backend == 'hubertfa_zh' else 0.)
         report["rhythm"] = rstat
         reference_shift = rstat.get("reference_shift_seconds", 0.)
         if reference_shift:
@@ -250,6 +275,7 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
                          max_shift_cents=opts.max_shift_cents,
                          smooth_ms=opts.smooth_ms,
                          pitch_mode=opts.pitch_mode,
+                         register_detail=opts.register_detail,
                          offset_override=onset_offset, **pitch_reference)
 
     # 八度策略：默认 auto 只在干声本音区内修正（保留演唱者音色）；
@@ -266,6 +292,7 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
                                  max_shift_cents=opts.max_shift_cents,
                                  smooth_ms=opts.smooth_ms,
                                  pitch_mode=opts.pitch_mode,
+                                 register_detail=opts.register_detail,
                                  offset_override=onset_offset, **pitch_reference)
     report["octave_shift"] = octave_delta
 
@@ -275,7 +302,8 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
         res.shift_cents[round(start*C.F0_FRAME_RATE):round(end*C.F0_FRAME_RATE)] = 0
         res.confidence[round(start*C.F0_FRAME_RATE):round(end*C.F0_FRAME_RATE)] = 0
     # 原曲结束后的保留人声没有可用参考，不能沿用最后一个音高。
-    res.shift_cents[round(len(ref_vocal) / C.VOC_SR * C.F0_FRAME_RATE):] = 0
+    if not pitch_reference:
+        res.shift_cents[round(len(ref_vocal) / C.VOC_SR * C.F0_FRAME_RATE):] = 0
     selected = src_f0 > 0
     res.stats["mean_abs_shift_cents"] = float(np.mean(np.abs(res.shift_cents[selected]))) if selected.any() else 0.
     res.stats["max_abs_shift_cents"] = float(np.max(np.abs(res.shift_cents),initial=0))
@@ -306,33 +334,34 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
     report["synth_seconds"] = round(len(vocal) / C.VOC_SR, 2)
 
     log("[6/6] 混音落盘")
+    # _place 的偏移方向与音高检测相反，静音区间仍以未移动的原唱为基准。
+    move = -(res.offset_seconds if onset_offset is None else onset_offset)
+    report['reference_gap_mute'] = {'enabled':False}
+    if opts.mute_reference_gaps:
+        from .vocal_gate import mute_gaps
+        start = round(move*C.VOC_SR)-round(reference_shift*C.VOC_SR)
+        vocal, kept = mute_gaps(vocal,singing_intervals,C.VOC_SR,start)
+        report['reference_gap_mute'] = {'enabled':True,'singing_intervals':len(singing_intervals),
+                                       'muted_seconds':round((len(vocal)-kept)/C.VOC_SR,3)}
     spf = int(round(C.VOC_SR / C.F0_FRAME_RATE))
     nf = min(len(ref_f0), len(ref_vocal) // spf)
     vmask = np.repeat(ref_f0[:nf] > 0, spf)
     ref_voiced = ref_vocal[: len(vmask)][vmask]
     ref_voiced_rms = audio.rms(ref_voiced) or audio.rms(ref_vocal)
     unscaled_rms = audio.rms(vocal)
-    vocal = audio.match_rms(vocal, ref_voiced_rms)
+    target_rms = ref_voiced_rms
+    if opts.mute_reference_gaps:
+        # 静音空档不参与人声响度标定。
+        target_rms *= np.sqrt(kept/max(1,len(vocal)))
+    vocal = audio.match_rms(vocal, target_rms)
     if capture is not None:
         capture['vocal_normalization'] = (audio.rms(vocal) / unscaled_rms if unscaled_rms else 1.)
     vocal = vocal * (10 ** (opts.vocal_gain_db / 20.0))
     report["vocal_rms_dbfs"] = round(20 * np.log10(max(audio.rms(vocal), 1e-9)), 1)
 
-    # res.offset_seconds = 干声比原唱晚多少（正=晚）；_place 要的是「内容平移量」
-    # （正=延后），即把干声往回挪，故取负号。
-    # 已用两套已知答案交叉验证：
-    #   selftest 干声晚 0.373s → offset +0.373 → move -0.373 → 对齐（残留 0.02s）
-    #   青花瓷 干声早   0.086s → offset -0.086 → move +0.086 → 音高误差 47.4 音分（≈最优 47.3）
-    #
-    # 若做了节奏对齐，用**入点偏移**而不是音高偏移：两者相差约 25ms，
-    # 用户优先级是「入点 > 中间 > 出点」，音高是逐帧局部修正，这点差只值 ~3 音分。
-    if onset_offset is not None:
-        move = -onset_offset
-    else:
-        move = -res.offset_seconds
     song_len = inst.shape[1] if inst is not None else len(ref_vocal)
     # 原唱缺失内容时，保留的演唱可能超出原曲末尾；伴奏补静音而不是截字。
-    if opts.rhythm and opts.rhythm_strength and opts.rhythm_mode == "full" and len(vocal) > song_len:
+    if opts.rhythm_mode == "full" and (rhythm_amount or chinese_pitch) and len(vocal) > song_len:
         song_len = len(vocal)
         if inst is not None:
             inst = np.pad(inst, ((0, 0), (0, song_len - inst.shape[1])))
@@ -352,7 +381,8 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
         capture['rendered_f0'] = fcpe.extract(placed, C.VOC_SR)
 
     vocal_path = out_path.with_name(out_path.stem + "_vocal.wav")
-    audio.save(vocal_path, placed, C.VOC_SR)
+    vocal_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(vocal_path, placed, C.VOC_SR, subtype='FLOAT')
 
     if opts.comparison and inst is not None:
         original = audio.match_rms(original_dry, ref_voiced_rms)
@@ -369,25 +399,36 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
         stereo = np.vstack([placed, placed])
         n_mix = min(stereo.shape[1], inst.shape[1])
         if opts.mix_effects:
-            from .mixing import enhance, master
-            log("[混音] 人声质感、原唱比例参考、空间效果与总线粘合")
+            from .mixing import enhance
+            log("[混音] 人声质感、原唱比例参考与空间效果")
             mixed, effect_stats = enhance(placed[:n_mix],inst[:,:n_mix],C.VOC_SR,space=opts.mix_space,
                 lowcut_hz=opts.mix_lowcut_hz,eq=opts.mix_eq,compression=opts.mix_compression,
-                deessing=opts.mix_deess,reverb=opts.mix_reverb,delay_amount=opts.mix_delay,duck=opts.mix_duck,
+                deessing=opts.mix_deess,harmonics=opts.mix_harmonics,reverb=opts.mix_reverb,
+                delay_amount=opts.mix_delay,duck=opts.mix_duck,
                 reference_vocal=ref_vocal[:n_mix],vocal_gain_db=opts.vocal_gain_db,capture=capture)
-            mixed, master_stats = master(mixed,C.VOC_SR,target_lufs=opts.target_lufs,
-                                         true_peak_ceiling=opts.true_peak_ceiling,apply_glue=True)
-            report["mixing"] = {**effect_stats,**master_stats}
+            report["mixing"] = effect_stats
         else:
             mixed = inst[:, :n_mix] + stereo[:, :n_mix]
             report["mixing"] = {"enabled":False}
-        # 峰值保护：留 1dB 余量，避免重采样/有损编码后削顶
-        pk = audio.peak(mixed)
-        ceiling = 10 ** (-1.0 / 20.0)        # ≈0.891
-        if pk > ceiling:
-            mixed = mixed * (ceiling / pk)
-            report["peak_limited_db"] = round(float(20 * np.log10(ceiling / pk)), 2)
-        audio.save(out_path, mixed, C.VOC_SR)
+        if opts.fixed_master:
+            from .mastering import finalize, write_output
+            log("[母带] C+ 响度校准与真峰值限幅")
+            mixed, master_stats = finalize(mixed, C.VOC_SR, (opts.master_density or 0.) if opts.mix_effects else 0.)
+            write_output(out_path, mixed, C.VOC_SR, master_stats)
+            report['mixing'].update(master_stats)
+        else:
+            if opts.mix_effects:
+                from .mixing import master
+                mixed, master_stats = master(mixed,C.VOC_SR,target_lufs=opts.target_lufs,
+                                             true_peak_ceiling=opts.true_peak_ceiling,apply_glue=True,
+                                             density=opts.master_density)
+                report['mixing'].update(master_stats)
+            pk = audio.peak(mixed)
+            ceiling = 10 ** (-1.0 / 20.0)
+            if pk > ceiling:
+                mixed = mixed * (ceiling / pk)
+                report['peak_limited_db'] = round(float(20 * np.log10(ceiling / pk)), 2)
+            audio.save(out_path, mixed, C.VOC_SR)
         report["output"] = str(out_path)
     report["vocal_stem"] = str(vocal_path)
     report["elapsed_seconds"] = round(time.time() - t_all, 1)
