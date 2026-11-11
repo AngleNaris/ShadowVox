@@ -1,4 +1,4 @@
-"""同一修音曲线、不同渲染器的整曲对比：神经声码器 / TD-PSOLA / Rubber Band R3。
+"""同一修音曲线、不同渲染器的整曲对比：神经声码器 / TD-PSOLA / Signalsmith。
 
 用法：python -X utf8 tools/renderer_comparisons.py 干声 原曲 [输出目录]
 0% 版本只做节奏与渲染，不修音高，用于单独判断渲染器本身的音色损伤。
@@ -16,12 +16,12 @@ from shadowvox.mixing import measure_loudness
 
 VERSIONS = [("A_vocoder_0", "vocoder", 0., "guarded"), ("B_psola_0", "psola", 0., "guarded"),
             ("C_vocoder_75", "vocoder", .75, "guarded"), ("D_psola_75", "psola", .75, "guarded"),
-            ("E_rubberband_75", "rubberband", .75, "guarded"), ("F_psola_full_75", "psola", .75, "full")]
+            ("E_signalsmith_75", "signalsmith", .75, "guarded"), ("F_psola_full_75", "psola", .75, "full")]
 NOTES = {"A_vocoder_0": "不修音高，只经神经声码器（现有引擎的音色损伤）",
          "B_psola_0": "不修音高，只经 PSOLA（新引擎的音色损伤）",
          "C_vocoder_75": "75% 修音，神经声码器（现有 GUI 默认）",
          "D_psola_75": "75% 修音，TD-PSOLA（推荐候选）",
-         "E_rubberband_75": "75% 修音，Rubber Band R3 保共振峰",
+         "E_signalsmith_75": "75% 修音，Signalsmith 保共振峰",
          "F_psola_full_75": "75% 修音，PSOLA + 整句贴齐原唱（与 D 只差节奏方式）"}
 
 

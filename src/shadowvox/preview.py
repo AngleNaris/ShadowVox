@@ -1,4 +1,4 @@
-"""同伴奏 A/B 试听准备；静态响度匹配不改变保存的成品。"""
+"""读取原电平试听轨，并为可选等响监听测量增益。"""
 from pathlib import Path
 import numpy as np
 import soundfile as sf
@@ -13,12 +13,11 @@ def prepare(before, after):
     target = min(-19., *(lufs - 1.5 - peak for lufs, peak in measures))
     tracks = []
     sample_rate = None
-    for path, (lufs, _) in zip(paths, measures):
+    for path in paths:
         data, sr = sf.read(path, dtype='float32', always_2d=True)
         if sample_rate is not None and sr != sample_rate:
             raise ValueError("对照音频采样率不一致")
         sample_rate = sr
-        data *= 10**((target-lufs)/20)
         tracks.append(np.ascontiguousarray(data))
     if tracks[0].shape != tracks[1].shape:
         raise ValueError("对照音频长度不一致")

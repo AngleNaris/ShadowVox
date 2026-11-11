@@ -12,7 +12,7 @@ from shadowvox.f0 import from_cent
 
 
 class RegisterTests(unittest.TestCase):
-    def test_both_octaves_preserved_and_large_error_corrected(self):
+    def test_both_octaves_preserved_and_moderate_error_corrected(self):
         ref = np.full(400, 5400.)
         for octave in (-2, -1, 0, 1):
             dry = ref + octave*1200 + 250
@@ -24,6 +24,13 @@ class RegisterTests(unittest.TestCase):
                 np.testing.assert_allclose(shift[50:-50], -250*strength)
                 self.assertGreater(abs(float(np.median(shift))), previous)
                 previous = abs(float(np.median(shift)))
+
+    def test_register_without_external_mapping_skips_large_folded_errors(self):
+        ref = np.full(200, 5400.)
+        shift, reliable, octave = register_shift(ref - 1200. + 350., ref, np.ones(200, bool), 1.)
+        np.testing.assert_array_equal(octave, -1)
+        np.testing.assert_array_equal(shift, 0.)
+        self.assertFalse(reliable.any())
 
     def test_phrase_and_sustained_register_change(self):
         for gap in (0, 40):

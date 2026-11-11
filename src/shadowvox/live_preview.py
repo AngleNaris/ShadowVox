@@ -2,14 +2,14 @@
 import numpy as np
 
 from . import audio, config as C
+from .pipeline import render_waveform
 
 
 class PreviewCache:
-    def __init__(self, capture, report, preview):
+    def __init__(self, capture, report):
         self.data = capture
         self.report = report
         self.initial = capture['options']
-        self.preview_gain = 10 ** (preview['gains_db'][1] / 20)
         self.fixed = capture['dry_before_denoise'] if self.initial['declip'] else None
         self.cleaned = {}
         if 'denoised_dry' in capture:
@@ -88,16 +88,15 @@ class PreviewCache:
         return out
 
     @staticmethod
-    def _warped(source, pieces, start, end):
+    def _warped(source, pieces, start, end, *, checkpoint=None):
         from .full_align import render_segments
-        return render_segments(source, pieces, C.VOC_SR, start=start, end=end)
+        return render_segments(source, pieces, C.VOC_SR, start=start, end=end, checkpoint=checkpoint)
 
-    def _pitch(self, vocal, reference, opts, protected, start, mapping=None):
+    def _pitch(self, vocal, reference, opts, protected, start, mapping, *, renderer, checkpoint=None):
         if not opts.strength:
             return vocal
         from .f0 import FcpeExtractor
         from .align import estimate_shift
-        from .psola import render
         if self.extractor is None:
             self.extractor = FcpeExtractor()
         dry_f0 = self.extractor.extract(vocal, C.VOC_SR)
@@ -116,7 +115,8 @@ class PreviewCache:
             a = max(0, round((lo-start/C.VOC_SR) * C.F0_FRAME_RATE))
             b = max(0, round((hi-start/C.VOC_SR) * C.F0_FRAME_RATE))
             shift[a:b] = 0
-        return render(vocal, C.VOC_SR, shift)
+        return render_waveform(vocal, C.VOC_SR, shift, renderer,
+                               f0=self.data.get('input_f0', dry_f0), checkpoint=checkpoint)
 
     def render(self, opts, position, seconds=12, *, checkpoint=None):
         """返回窗口起点与立体声草稿，允许调用方在处理阶段之间取消。"""
@@ -128,6 +128,7 @@ class PreviewCache:
         end = min(total, max(start + 1, round((position + seconds) * sr)))
         local_reference = None
         reference_shift = self.report.get('rhythm', {}).get('reference_shift_seconds',0.)
+        gate = self.data.get('gap_keep_intervals')
         same_source = all(getattr(opts, key) == self.initial[key] for key in
                           ('denoise', 'denoise_strength', 'declip', 'rhythm', 'rhythm_strength', 'rhythm_max_rate'))
         chinese_pitch = (opts.alignment_backend == 'hubertfa_zh' and opts.rhythm_mode == 'full'
@@ -136,7 +137,9 @@ class PreviewCache:
             same_source = False
         detail = (opts.register_detail, opts.max_shift_cents)
         original_detail = (self.initial.get('register_detail',0.),self.initial.get('max_shift_cents',450.))
+        renderer = 'psola' if opts.renderer == 'vocoder' else opts.renderer
         reused_vocal = (same_source and opts.strength == self.initial['strength'] and detail == original_detail
+                        and opts.renderer == self.initial['renderer']
                         and opts.mute_reference_gaps == self.initial.get('mute_reference_gaps',False))
         if reused_vocal:
             vocal = self.data['vocal'][start:end].copy()
@@ -144,7 +147,6 @@ class PreviewCache:
             accompaniment = self.data['inst'][:, start:end].copy()
         elif same_source:
             from .align import estimate_shift
-            from .psola import render
             if self.full_shift is None or self.shift_detail != detail:
                 initial_strength = self.initial['strength']
                 if initial_strength and detail == original_detail:
@@ -164,11 +166,13 @@ class PreviewCache:
             shift = np.interp(times * C.F0_FRAME_RATE, np.arange(len(self.full_shift)),
                               self.full_shift, left=0., right=0.) * opts.strength
             if opts.strength:
-                vocal = render(vocal, sr, shift)
+                vocal = render_waveform(vocal, sr, shift, renderer, f0=self.data.get('input_f0'),
+                                        checkpoint=checkpoint)
             vocal *= self.data['vocal_normalization'] * 10 ** (opts.vocal_gain_db / 20)
             accompaniment = self.data['inst'][:, start:end].copy()
         else:
             mapping = None
+            stats = {}
             if (opts.rhythm and opts.rhythm_strength) or chinese_pitch:
                 raw = self.data['dry_before_denoise'] if self.initial['declip'] else self.data['dry_input']
                 pieces, stats, _ = self.plan(opts, raw)
@@ -182,7 +186,7 @@ class PreviewCache:
                 segment = (min(bounds)*sr, max(bounds)*sr) if bounds else (0, 0)
                 source = self.source(opts, segment=segment)
                 check()
-                vocal, protected = self._warped(source, pieces, start, end)
+                vocal, protected = self._warped(source, pieces, start, end, checkpoint=checkpoint)
                 mapping = (pieces, self.data['rhythm_plan'])
             else:
                 move = 0.
@@ -195,12 +199,21 @@ class PreviewCache:
             local_reference = reference
             original_bed = self.data['inst_original']
             accompaniment = np.vstack([self._placed(ch, start, end, reference_shift) for ch in original_bed])
-            vocal = self._pitch(vocal, reference, opts, protected, start, mapping)
+            vocal = self._pitch(vocal, reference, opts, protected, start, mapping,
+                                renderer=renderer, checkpoint=checkpoint)
             vocal *= self.data['vocal_normalization'] * 10 ** (opts.vocal_gain_db / 20)
+            if opts.mute_reference_gaps:
+                from .vocal_gate import keep_intervals
+                gate, _ = keep_intervals(self.data['reference_singing'], self.data.get('source_singing', ()), sr,
+                    pieces=mapping[0] if mapping else None, reference_shift=reference_shift,
+                    protected=stats.get('vocal_preserve_intervals_seconds', ()))
         check()
         if opts.mute_reference_gaps and not reused_vocal:
             from .vocal_gate import mute_gaps
-            vocal, _ = mute_gaps(vocal,self.data['reference_singing'],sr,start-round(reference_shift*sr))
+            if gate is None:
+                front = round(reference_shift*sr)
+                gate = [(a+front,b+front) for a,b in self.data['reference_singing']]
+            vocal, _ = mute_gaps(vocal,gate,sr,start)
         # 较短尾段补零，保证滤波器与包络计算有足够输入。
         length = len(vocal)
         if length < sr // 2:
@@ -249,5 +262,4 @@ class PreviewCache:
         ceiling = 10 ** (opts.true_peak_ceiling / 20)
         if peak > ceiling:
             mixed *= ceiling / peak
-        mixed *= self.preview_gain
         return start, np.ascontiguousarray(mixed[:, :length].T, dtype=np.float32)

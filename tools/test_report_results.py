@@ -22,6 +22,7 @@ class ResultsTests(unittest.TestCase):
         after[:80] = 0
         result = analysis.pitch_result(before,after,reference)
         self.assertEqual(result['common_frames'],1120)
+        self.assertEqual(result['coverage']['output_f0_missing_frames'],80)
         self.assertAlmostEqual(result['before_median'],35.)
         self.assertAlmostEqual(result['after_median'],5.)
         self.assertGreater(min(v for v in result['window']['reference'] if v),56.)
@@ -47,6 +48,37 @@ class ResultsTests(unittest.TestCase):
         np.testing.assert_array_equal(analysis._placed_frames(late,-.08,len(reference)),reference)
         unchanged = analysis.timing_result(before,before,reference)
         self.assertEqual(unchanged['before_median_ms'],unchanged['after_median_ms'])
+
+    def test_first_onset_omission_stays_visible_when_other_pairs_are_perfect(self):
+        signals = []
+        for first in (100,114,140):
+            f0 = np.zeros(560)
+            for start in (first,220,340,460):
+                f0[start:start+25] = 220
+            signals.append(f0)
+        reference,before,after = signals
+        result = analysis.timing_result(before,after,reference)
+        self.assertEqual(result['paired_onsets'],3)
+        self.assertEqual(result['after_median_ms'],0.)
+        self.assertEqual((result['before_unmatched_reference'],result['after_unmatched_reference']), (0,1))
+        self.assertEqual(result['first_reference_onset'], dict(time=1.,before_ms=140.,after_ms=None))
+
+    def test_report_distinguishes_f0_missing_from_near_silence(self):
+        sr = 44100
+        frames = 150
+        input_f0 = np.full(frames, 220.)
+        output_f0 = input_f0.copy()
+        output_f0[:30] = 0
+        source = np.full(frames*441, .1)
+        vocal = source.copy()
+        vocal[:20*441] = 0
+        capture = dict(ref_f0=input_f0, dry_f0=input_f0, rendered_f0=output_f0,
+                       input_f0=input_f0, move=0., vocal=vocal, dry_input=source)
+        coverage = analysis.results({},capture)['pitch']['coverage']
+        self.assertEqual(coverage['output_f0_missing_frames'],30)
+        self.assertEqual(coverage['output_near_silent_input_voiced_frames'],20)
+        self.assertEqual(coverage['output_f0_missing_intervals_seconds'], [[0.,.3]])
+        self.assertEqual(coverage['output_near_silent_intervals_seconds'], [[0.,.2]])
 
     def test_vocal_tone_does_not_claim_a_gain_change_as_timbre(self):
         sr = 44100

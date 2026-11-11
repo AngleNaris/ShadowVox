@@ -54,8 +54,8 @@ def main():
                  ROOT/'plugins/ZL Limiter.vst3/Contents/x86_64-win/ZL Limiter.vst3',
                  ROOT/'plugins/ZL-AGPL-3.0.txt']
     external += sorted(p for p in (ROOT/'models/hubertfa').iterdir() if p.is_file())
-    rubberband = ROOT/'tools/vendor/rubberband-4.0.0/rubberband-4.0.0-gpl-executable-windows'
-    external += [rubberband/'rubberband.exe', rubberband/'sndfile.dll']
+    subprocess.run([sys.executable, '-B', str(ROOT/'tools/build_signalsmith.py')], cwd=ROOT, check=True)
+    external.append(ROOT/'tools/vendor/signalsmith/shadowvox-signalsmith.exe')
     ffmpeg = Path(shutil.which('ffmpeg'))
     external.append(ffmpeg)
     inputs = {p.relative_to(ROOT).as_posix() if p.is_relative_to(ROOT) else p.name: sha256(p)

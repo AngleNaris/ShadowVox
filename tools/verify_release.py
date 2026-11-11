@@ -17,6 +17,7 @@ from PyInstaller.utils.win32.versioninfo import read_version_info_from_executabl
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src'))
 from shadowvox import AUTHOR, __version__, mixing, pipeline
+from shadowvox.jobs import DESKTOP_RENDERER
 from shadowvox.reporting import build
 
 
@@ -34,8 +35,8 @@ def check_archive(executable):
     package = CArchiveReader(str(executable))
     modules = package.open_embedded_archive('PYZ.pyz')
     checked = []
-    for name in ('__init__', 'align', 'hubert_alignment', 'full_align', 'lyric_anchors', 'pipeline', 'live_preview', 'psola',
-                 'separate', 'vocal_gate', 'jobs', 'updates',
+    for name in ('__init__', 'align', 'hubert_alignment', 'full_align', 'lyric_anchors', 'pipeline', 'live_preview',
+                 'psola', 'signalsmith', 'separate', 'vocal_gate', 'jobs', 'updates',
                  'mixing', 'density', 'mastering', 'vst_worker', 'gui', 'gui_bridge', 'reporting', 'report_analysis', 'denoise'):
         path = ROOT/'src/shadowvox'/f'{name}.py'
         key = 'shadowvox' if name == '__init__' else f'shadowvox.{name}'
@@ -49,6 +50,8 @@ def check_archive(executable):
             assets.append(key)
     helper = 'bin\\shadowvox-denoise.exe'
     assert hashlib.sha256(package.extract(helper)).hexdigest() == digest(ROOT/'tools/vendor/deepfilternet/shadowvox-denoise.exe')
+    helper = 'bin\\shadowvox-signalsmith.exe'
+    assert hashlib.sha256(package.extract(helper)).hexdigest() == digest(ROOT/'tools/vendor/signalsmith/shadowvox-signalsmith.exe')
     model_files = []
     for path in (ROOT/'models').rglob('*'):
         key = str(path.relative_to(ROOT))
@@ -60,7 +63,8 @@ def check_archive(executable):
         zl = f'plugins\\ZL {name}.vst3\\Contents\\x86_64-win\\ZL {name}.vst3'
         assert hashlib.sha256(package.extract(zl)).hexdigest() == digest(ROOT/zl)
     assert 'licenses\\zl-compressor\\ZL-AGPL-3.0.txt' in package.toc
-    for key in ('bin\\ffmpeg.exe','bin\\rubberband.exe','bin\\sndfile.dll',
+    for key in ('bin\\ffmpeg.exe','bin\\shadowvox-signalsmith.exe',
+                'licenses\\signalsmith\\stretch\\LICENSE.txt','licenses\\signalsmith\\linear\\LICENSE.txt',
                 'models\\whisper-base.pt','models\\fcpe.onnx','models\\Kim_Vocal_2.onnx'):
         assert key in package.toc, key
     info = read_version_info_from_executable(str(executable))
@@ -98,7 +102,7 @@ def main():
             source = pipeline.run(request['dry'], request['song'], output, work_dir=request.get('work'),
                 opts=pipeline.Options(strength=request.get('strength', .75), pitch_mode='register',
                     max_shift_cents=450, mix_effects=request.get('mix_effects', True), comparison=True,
-                    renderer='psola', rhythm_mode='full', master_density=request['master_density'], fixed_master=request['fixed_master'],
+                    renderer=DESKTOP_RENDERER, rhythm_mode='full', master_density=request['master_density'], fixed_master=request['fixed_master'],
                     reuse_stems=request.get('reuse_stems', True), mute_reference_gaps=request['mute_reference_gaps'],
                     dry_has_backing=request.get('dry_has_backing', False)),
                 capture=capture, log=emit)
@@ -127,13 +131,16 @@ def main():
     frozen = json.loads((folder/'frozen.report.json').read_text(encoding='utf-8'))
     assert frozen['app_version'] == __version__
     assert frozen['mixing']['mix_preset'] == mixing.MIX_PRESET
+    assert frozen['mixing']['duck_band_hz'] == [250, 4000]
+    assert frozen['mixing']['max_broadband_duck_db'] == frozen['mixing']['max_low_mid_duck_db'] == 0.
+    assert 0. < frozen['mixing']['max_band_duck_db'] <= 2.125
     if request['master_density']:
         assert frozen['mixing']['density']['applied']
     if request['fixed_master']:
         assert frozen['mixing']['readback_verified'] and frozen['mixing']['measured_output_true_peak_dbtp'] <= -.5
         assert frozen['mixing']['target_reached']
     rhythm = frozen['rhythm']
-    assert rhythm['algorithm'] == 'hubertfa-zh+rubberband-r3-v1'
+    assert rhythm['algorithm'] == 'hubertfa-zh+signalsmith-v1'
     assert rhythm['language'] == 'zh' and rhythm['lyric_anchors'] > 0
     assert rhythm['order_preserved'] and rhythm['continuous_source_coverage']
     assert rhythm['rate_min'] >= .9 and rhythm['rate_max'] <= 1.1

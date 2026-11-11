@@ -38,9 +38,13 @@ datas=[(str(root/'THIRD_PARTY.txt'),'licenses'),(str(root/'models/fcpe.onnx'),'m
        (str(root/'tools/vendor/deepfilternet/licenses'),'licenses/deepfilternet'),
        (str(zl_license),'licenses/zl-compressor')]
 datas += [(str(bundle),f'plugins/{bundle.name}') for bundle in zl_bundles]
-# 整句对齐与 R3 变速：官方 Rubber Band 命令行（GPL-2.0-or-later）及其 libsndfile。
-rubberband=root/'tools/vendor/rubberband-4.0.0/rubberband-4.0.0-gpl-executable-windows'
-datas+=[(str(rubberband/'COPYING.txt'),'licenses/rubberband')]
+signalsmith=root/'tools/vendor/signalsmith/shadowvox-signalsmith.exe'
+if not signalsmith.is_file():
+    raise SystemExit('请先运行 python tools/build_signalsmith.py')
+signalsmith_sources=root/'tools/signalsmith/third_party'
+datas += [(str(signalsmith_sources/name/'LICENSE.txt'), f'licenses/signalsmith/{name}')
+          for name in ('stretch','linear')]
+datas.append((str(signalsmith_sources/'ORIGIN.txt'),'licenses/signalsmith'))
 for path in (root/'models/hifigan_pkg').glob('*.txt'):
     datas.append((str(path),'licenses/hifigan'))
 datas+=copy_metadata('onnxruntime-directml')
@@ -57,7 +61,7 @@ ffmpeg=Path(shutil.which('ffmpeg')).resolve()
 datas.append((str(ffmpeg.parent.parent/'LICENSE'),'licenses/ffmpeg'))
 python_license=Path(sys.base_prefix)/'LICENSE.txt'
 if python_license.exists():datas.append((str(python_license),'licenses/python'))
-binaries=[(str(ffmpeg),'bin'),(str(rubberband/'rubberband.exe'),'bin'),(str(rubberband/'sndfile.dll'),'bin'),
+binaries=[(str(ffmpeg),'bin'),(str(signalsmith),'bin'),
           (str(root/'tools/vendor/deepfilternet/shadowvox-denoise.exe'),'bin')]+collect_dynamic_libs('onnxruntime')
 qt_runtime=Path(metadata.distribution('PySide6-Essentials').locate_file('PySide6'))
 windows=Path(os.environ['SystemRoot'])

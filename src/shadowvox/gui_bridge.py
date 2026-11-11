@@ -46,9 +46,9 @@ def envelope(track, bins=WAVE_BINS, *, edges=None):
     return peak, rms
 
 
-def wave_values(peak, rms, gain):
-    return dict(peak=np.round(np.minimum(peak.astype(np.float64)*gain, 1), 4).tolist(),
-                rms=np.round(np.minimum(rms*gain, 1), 4).tolist())
+def wave_values(peak, rms):
+    return dict(peak=np.round(np.minimum(peak.astype(np.float64), 1), 4).tolist(),
+                rms=np.round(np.minimum(rms, 1), 4).tolist())
 
 
 def report_payload(report, metrics, version, path):
@@ -124,7 +124,7 @@ class DraftWorker(QThread):
 
 
 class VersionLoader(QThread):
-    """切换成品版本：重新准备同伴奏等响度的前后对照。"""
+    """切换成品版本，载入原电平对照和可选等响增益。"""
     succeeded = Signal(object)
     failed = Signal(str)
 
@@ -353,7 +353,7 @@ class Bridge(QObject):
         self.versions[n] = dict(before=result['report']['comparison_before'], audio=result['report']['output'],
                                 report=report_payload(result['report'], result['analysis'], n, result['path']))
         from .live_preview import PreviewCache
-        self.preview_cache = PreviewCache(result['capture'], result['report'], result['preview'])
+        self.preview_cache = PreviewCache(result['capture'], result['report'])
         self.load_tracks(n, result['tracks'], result['sr'], result['preview']['gains_db'], select=2)
         rhythm = result['report'].get('rhythm', {})
         payload = dict(report=self.versions[n]['report'],
@@ -366,17 +366,16 @@ class Bridge(QObject):
         self.draft_revision += 1; self.cancel_draft()
         self.draftState.emit('{"state":"empty"}')
         playing, position = self.player.playing, self.player.position
-        loop, delta, selected = self.player.loop, self.player.delta, self.player.selected
-        self.player.load([before, after.copy(), after], sr)
+        delta, selected = self.player.delta, self.player.selected
+        self.player.load([before, after.copy(), after], sr, gains_db)
         self.player.position = min(position, self.player.frames)
-        self.player.loop, self.player.delta = loop, delta
+        self.player.delta = delta
         self.player.select(selected if select is None else select)
         self.current = n; self.draft_range = (0, self.player.frames)
         self.draft_ready_revision = self.draft_revision; self.draft_failed = False
         self.wave_bins = wave_edges(self.player.frames)
-        before_gain, self.wave_after_gain = (10**(-db/20) for db in gains_db)
-        before_wave = wave_values(*envelope(before, edges=self.wave_bins), before_gain)
-        after_wave = wave_values(*envelope(after, edges=self.wave_bins), self.wave_after_gain)
+        before_wave = wave_values(*envelope(before, edges=self.wave_bins))
+        after_wave = wave_values(*envelope(after, edges=self.wave_bins))
         self.waveform.emit(json.dumps(dict(duration=self.player.frames/sr, frames=self.player.frames, sel=self.player.selected,
                                            tracks=[before_wave, after_wave, after_wave])))
         if playing:
@@ -446,7 +445,7 @@ class Bridge(QObject):
     def on_draft_success(self, result):
         revision, start, samples = result
         if revision != self.draft_revision or not self.live_preview or self.player.selected != 1: return
-        self.player.replace_segment(1, start, samples/(self.preview_cache.preview_gain*self.wave_after_gain))
+        self.player.replace_segment(1, start, samples)
         end = min(self.player.frames, start+len(samples))
         self.draft_ready_revision = revision; self.draft_range = (start, end)
         first = int(np.searchsorted(self.wave_bins, start, side='right')-1)
@@ -454,7 +453,7 @@ class Bridge(QObject):
         edges = self.wave_bins[first:last+1]
         peak, rms = envelope(self.player.tracks[1][edges[0]:edges[-1]], edges=edges-edges[0])
         self.waveformSegment.emit(json.dumps(dict(index=1, first=first,
-            **wave_values(peak, rms, self.wave_after_gain))))
+            **wave_values(peak, rms))))
         sr = self.player.sr
         self.draftState.emit(json.dumps(dict(state='ready', start=start/sr, end=end/sr)))
 
@@ -498,10 +497,9 @@ class Bridge(QObject):
     def setVolume(self, value):
         self.player.volume = max(0., min(1., value))
 
-    @Slot(bool, float, float)
-    def setLoop(self, enabled, start, end):
-        if enabled: self.player.set_loop(start, end)
-        else: self.player.loop = None
+    @Slot(bool)
+    def setEqualLoudness(self, enabled):
+        self.player.set_equal_loudness(enabled)
 
     @Slot(bool)
     def setDelta(self, enabled):

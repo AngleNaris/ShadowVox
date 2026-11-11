@@ -41,6 +41,7 @@ def main():
         return 0
     if len(sys.argv)>2 and sys.argv[1]=="--process":
         import json
+        from shadowvox.jobs import DESKTOP_RENDERER
         from shadowvox.pipeline import run,Options
         request=json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
         log_path=Path(request['output']).with_suffix('.log')
@@ -51,7 +52,7 @@ def main():
             try:
                 run(request['dry'],request['song'],request['output'],work_dir=request.get('work'),
                     opts=Options(strength=request.get('strength',.75),pitch_mode='register',max_shift_cents=450,
-                                 mix_effects=request.get('mix_effects',True),renderer='psola',rhythm_mode='full',
+                                 mix_effects=request.get('mix_effects',True),renderer=DESKTOP_RENDERER,rhythm_mode='full',
                                  master_density=request.get('master_density'),
                                  fixed_master=request.get('fixed_master',False),
                                  dry_has_backing=request.get('dry_has_backing',False),

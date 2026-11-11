@@ -13,6 +13,7 @@ from .align import estimate_shift, apply_shift
 from . import rhythm
 from .f0 import FcpeExtractor
 from .separate import separate_song, isolate_dry, DEFAULT_MODEL
+from .signalsmith import ENGINE
 from .vocoder import Vocoder
 
 
@@ -27,14 +28,14 @@ class Options:
     octave: str = "auto"            # auto=折叠到干声自身音区 | match=跟原唱同音区（可整体升降八度）
     rhythm: bool = True             # 入点级节奏对齐（跟原唱对齐，只修入点，不逐字硬贴）
     rhythm_max_rate: float = 0.10   # 局部时间伸缩上限，10%=最多拉伸/压缩 10%
-    rhythm_mode: str = "guarded"    # guarded 只修可信入点 | full 整句逐帧贴齐原唱（需 Rubber Band）
+    rhythm_mode: str = "full"       # Signalsmith 受限变时 | guarded 历史入点对照
     alignment_backend: str = "hubertfa_zh"  # 当前桌面仅支持中文歌声
     separate_model: str = DEFAULT_MODEL
     reuse_stems: bool = True
     mix: bool = True
     mix_effects: bool = False      # GUI 开关：EQ/轻压缩/混响/避让；伴奏合并独立于此
     comparison: bool = False       # 桌面试听：额外保存未经局部节奏/音高校正的同伴奏版本
-    renderer: str = "vocoder"      # vocoder 神经重合成 | psola 原波形 TD-PSOLA | rubberband R3
+    renderer: str = ENGINE         # Signalsmith | 实验对照 vocoder、psola
     denoise: bool = True           # 修音前使用已试听确认的 AI 温和降噪
     mix_space: float = 1.0         # 混响与延时发送的共同倍率
     denoise_strength: float = 1.0  # 原始干声与温和降噪结果之间的比例
@@ -134,6 +135,16 @@ def _stems_ok(vocal, inst, song_path):
     return abs(float(np.corrcoef(seg, ref)[0, 1])) < 0.9
 
 
+def render_waveform(vocal, sr, shift, renderer, *, f0=None, checkpoint=None):
+    if renderer == "psola":
+        from .psola import render
+        return render(vocal, sr, shift)
+    if renderer == ENGINE:
+        from .signalsmith import render_pitch
+        return render_pitch(vocal, shift, sr, f0=f0, checkpoint=checkpoint)
+    raise ValueError(f"未知渲染器: {renderer}")
+
+
 def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print, capture=None):
     opts = opts or Options()
     if opts.fixed_master:
@@ -202,13 +213,15 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
 
     log("[3/6] 提取双轨音高")
     fcpe = FcpeExtractor()
-    dry_f0 = fcpe.extract(dry, C.VOC_SR)
+    input_f0 = dry_f0 = fcpe.extract(dry, C.VOC_SR)
     ref_f0 = fcpe.extract(ref_vocal, C.VOC_SR)
     if opts.mute_reference_gaps or capture is not None:
-        from .vocal_gate import reference_intervals
+        from .vocal_gate import reference_intervals, source_melody_intervals
         singing_intervals = reference_intervals(ref_vocal,ref_f0,C.VOC_SR)
+        source_singing = source_melody_intervals(dry_f0,len(dry),C.VOC_SR)
         if capture is not None:
             capture['reference_singing'] = singing_intervals
+            capture['source_singing'] = source_singing
     if capture is not None:
         capture['input_f0'] = dry_f0.copy()
     report["dry_voiced_ratio"] = round(float((dry_f0 > 0).mean()), 3)
@@ -221,6 +234,7 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
     before_move = None
     pitch_reference = {}
     reference_shift = 0.
+    rhythm_pieces = None
     rhythm_amount = opts.rhythm_strength if opts.rhythm else 0.
     chinese_pitch = opts.alignment_backend == 'hubertfa_zh' and opts.strength and opts.pitch_mode == 'register'
     if opts.rhythm_mode == "full" and (rhythm_amount or chinese_pitch):
@@ -232,6 +246,7 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
                            max_rate=opts.rhythm_max_rate, backend=opts.alignment_backend,
                            offset_hint=-rhythm.onset_offset(dry_f0,ref_f0) if opts.alignment_backend == 'hubertfa_zh' else 0.)
         report["rhythm"] = rstat
+        rhythm_pieces = alignment_capture['rhythm_pieces']
         reference_shift = rstat.get("reference_shift_seconds", 0.)
         if reference_shift:
             front = round(reference_shift * C.VOC_SR)
@@ -241,7 +256,7 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
         onset_offset = 0.0              # 已在原唱时间线上
         before_move = rstat["median_offset_seconds"] + reference_shift
         dry_f0 = fcpe.extract(dry, C.VOC_SR)
-        reference_times, reference_valid = pitch_mapping(alignment_capture['rhythm_pieces'],
+        reference_times, reference_valid = pitch_mapping(rhythm_pieces,
             alignment_capture['rhythm_plan'], len(dry_f0), C.F0_FRAME_RATE)
         pitch_reference = dict(reference_times=reference_times, reference_valid=reference_valid)
         report['pitch_reference'] = {'basis': 'independent_correspondence',
@@ -323,26 +338,31 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
         voiced = (dry_f0 > 0) & (corr_f0 > 0)
         total = np.zeros(len(dry_f0))
         total[voiced] = 1200 * np.log2(corr_f0[voiced] / dry_f0[voiced])
-        if opts.renderer == "psola":
-            from .psola import render
-            vocal = render(dry, C.VOC_SR, total)
-        elif opts.renderer == "rubberband":
-            from .rubberband import render
-            vocal = render(dry, total, C.VOC_SR)[0]
-        else:
-            raise ValueError(f"未知渲染器: {opts.renderer}")
+        vocal = render_waveform(dry, C.VOC_SR, total, opts.renderer, f0=input_f0)
     report["synth_seconds"] = round(len(vocal) / C.VOC_SR, 2)
 
     log("[6/6] 混音落盘")
     # _place 的偏移方向与音高检测相反，静音区间仍以未移动的原唱为基准。
     move = -(res.offset_seconds if onset_offset is None else onset_offset)
     report['reference_gap_mute'] = {'enabled':False}
+    if opts.mute_reference_gaps or capture is not None:
+        from .vocal_gate import keep_intervals
+        candidates = source_singing
+        if not rhythm_pieces and report.get('rhythm', {}).get('applied'):
+            candidates = source_melody_intervals(dry_f0,len(dry),C.VOC_SR)
+        gate, reference_gate = keep_intervals(singing_intervals, candidates, C.VOC_SR, pieces=rhythm_pieces,
+            move=move, reference_shift=reference_shift,
+            protected=report.get('rhythm', {}).get('vocal_preserve_intervals_seconds', ()))
+        if capture is not None:
+            capture['gap_keep_intervals'] = gate
     if opts.mute_reference_gaps:
         from .vocal_gate import mute_gaps
-        start = round(move*C.VOC_SR)-round(reference_shift*C.VOC_SR)
-        vocal, kept = mute_gaps(vocal,singing_intervals,C.VOC_SR,start)
+        start = round(move*C.VOC_SR)
+        vocal, kept = mute_gaps(vocal,gate,C.VOC_SR,start)
+        reference_kept = sum(max(0, min(start+len(vocal), b)-max(start, a)) for a,b in reference_gate)
         report['reference_gap_mute'] = {'enabled':True,'singing_intervals':len(singing_intervals),
-                                       'muted_seconds':round((len(vocal)-kept)/C.VOC_SR,3)}
+                                       'muted_seconds':round((len(vocal)-kept)/C.VOC_SR,3),
+                                       'retained_outside_reference_seconds':round((kept-reference_kept)/C.VOC_SR,3)}
     spf = int(round(C.VOC_SR / C.F0_FRAME_RATE))
     nf = min(len(ref_f0), len(ref_vocal) // spf)
     vmask = np.repeat(ref_f0[:nf] > 0, spf)

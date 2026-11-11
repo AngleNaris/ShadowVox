@@ -210,6 +210,20 @@ def check_gui():
     assert js("document.querySelectorAll('#rp-summary dt').length") >= 7
     h.shot('done')
 
+    # 等响默认关闭，开关即时生效，波形与播放位置保持原样。
+    assert js("!switchOn(document.querySelector('#p-equal-loudness'))")
+    assert not w.bridge.player.equal_loudness
+    assert js("!document.querySelector('#loop-lane, #loop-editor, #p-loop')")
+    original_wave = js('JSON.stringify(wave.tracks)')
+    original_position = w.bridge.player.position
+    h.click('#p-equal-loudness'); h.wait(100)
+    assert w.bridge.player.equal_loudness and js("switchOn(document.querySelector('#p-equal-loudness'))")
+    h.shot('equal-loudness-on')
+    js("document.querySelector('#p-equal-loudness').focus(); 1"); h.key(Qt.Key_Space); h.wait(100)
+    assert not w.bridge.player.equal_loudness and not js("switchOn(document.querySelector('#p-equal-loudness'))")
+    assert original_position == w.bridge.player.position and original_wave == js('JSON.stringify(wave.tracks)')
+    h.shot('equal-loudness-off')
+
     # 空格播放 / 暂停（真实按键）；切换音源保持位置
     h.js("document.activeElement.blur(); 1"); h.key(Qt.Key_Space); h.wait(700)
     assert w.bridge.player.playing and w.bridge.player.position > 0

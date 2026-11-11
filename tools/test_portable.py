@@ -55,8 +55,8 @@ def run():
     expected=max(report['song_seconds']+report['rhythm'].get('reference_shift_seconds',0),
                  report['dry_seconds_after_rhythm'])
     assert abs(len(samples)/sr-expected)<.02
-    # 冻结程序必须实际走 PSOLA + 整句对齐（numba、内置 Rubber Band 均可用）。
-    assert report['options']['renderer']=='psola' and report['rhythm']['algorithm']=='hubertfa-zh+rubberband-r3-v1'
+    # 冻结程序使用内置 Signalsmith 做音高渲染和整句对齐。
+    assert report['options']['renderer']=='signalsmith' and report['rhythm']['algorithm']=='hubertfa-zh+signalsmith-v1'
     assert 'lyric_error' not in report['rhythm'],report['rhythm'].get('lyric_error')
     lufs,peak=measure_loudness(output)
     assert peak<=-1.45,(lufs,peak)

@@ -17,8 +17,9 @@ envelope = audio.envelope
 # 已选短房间 C、长尾 +3 dB 的固定返回量，不随每次渲染重新匹配湿声 RMS。
 SHORT_ROOM_RETURN_DB = -15.438630706242808
 LONG_ROOM_RETURN_DB = -1.3343912329744447 + 3.
-LOW_MID_DUCK_BAND_HZ = (150, 250)
-MIX_PRESET = "single_vocal_low_mid_duck"
+MID_DUCK_BAND_HZ = (250, 4000)
+MID_DUCK_MAX_DB = 2.5 * .85
+MIX_PRESET = "single_vocal_midrange_duck"
 
 
 def bell(x, sr, frequency, gain_db, q):
@@ -225,27 +226,12 @@ def _backing(accompaniment, sidechain, sr, amount):
     activity = np.clip((20*np.log10(np.maximum(env,1e-8))+45)/25,0,1)
     if not amount:
         return accompaniment, activity
-    band = sosfiltfilt(butter(2,[250,min(4000,sr*.45)],btype="bandpass",fs=sr,output="sos"),accompaniment,axis=-1)
-    bed = accompaniment-band*(1-10**(-2.5*amount*activity/20))
-    bed *= 10**(-.6*amount*activity/20)
+    edges = (MID_DUCK_BAND_HZ[0], min(MID_DUCK_BAND_HZ[1], sr*.45))
+    # Preserve the original band shape and narrow its skirts without increasing cut near the edges.
+    bandpass = np.vstack([butter(order, edges, btype="bandpass", fs=sr, output="sos") for order in (2, 6)])
+    band = sosfiltfilt(bandpass, accompaniment, axis=-1)
+    bed = accompaniment-band*(1-10**(-MID_DUCK_MAX_DB*amount*activity/20))
     return bed.astype(np.float32), activity
-
-
-def _low_mid_duck(bed, vocal, sr, amount):
-    """人声低中频被遮住时，联动衰减伴奏的同频段，最大 2 dB。"""
-    if not amount:
-        return bed, 0.
-    band_filter = butter(2, LOW_MID_DUCK_BAND_HZ, btype='bandpass', fs=sr, output='sos')
-    bed_band = sosfiltfilt(band_filter, bed, axis=-1)
-    vocal_band = sosfiltfilt(band_filter, vocal)
-    hop = round(.01 * sr)
-    vocal_db = 20 * np.log10(_frame_envelope(vocal_band, sr, hop, .035, .18))
-    bed_db = 20 * np.log10(_frame_envelope(bed_band, sr, hop, .035, .18))
-    presence = np.clip((vocal_db + 42) / 14, 0, 1)
-    overlap = np.clip((bed_db - vocal_db) * amount / 6, 0, 1)
-    reduction = 2 * presence * overlap
-    gain = 10 ** (-_interpolate_frames(reduction, bed.shape[-1], hop) / 20)
-    return (bed - bed_band * (1 - gain)).astype(np.float32), float(reduction.max())
 
 
 def enhance(vocal, accompaniment, sr, space=1., lowcut_hz=75., eq=1., compression=1.,
@@ -259,7 +245,7 @@ def enhance(vocal, accompaniment, sr, space=1., lowcut_hz=75., eq=1., compressio
         # 遮蔽避让只参与实际混音，比例曲线用独立分析链计算。
         analysis_voice = vocal * 10**(-vocal_gain_db/20)
         analysis_y, _ = _vocal_chain(analysis_voice,sr,lowcut_hz,min(eq,1.),compression,deessing,False)
-        bed, activity = _backing(accompaniment,analysis_y,sr,duck)
+        bed, _ = _backing(accompaniment,analysis_y,sr,duck)
         baseline = (analysis_y[None,:] + early_reflections(analysis_y,sr) +
                     room(analysis_y,sr,size=.52) + delay(analysis_y,sr))
         times, curve_db, balance_stats = mix_balance.curve(analysis_y,baseline,bed,reference_vocal,accompaniment,sr,
@@ -270,7 +256,6 @@ def enhance(vocal, accompaniment, sr, space=1., lowcut_hz=75., eq=1., compressio
     scale = (10**(np.asarray(gain_db)/20)).astype(np.float32) if gain_db is not None else 1.
     scaled_vocal = y * scale
     bed, activity = _backing(accompaniment,y,sr,duck)
-    bed, low_mid_reduction = _low_mid_duck(bed, scaled_vocal, sr, duck)
     long_tail = float(np.clip(reverb-1.,0.,1.))
     short_send = min(reverb,1.)
     long_send = short_send + .4*long_tail
@@ -304,11 +289,11 @@ def enhance(vocal, accompaniment, sr, space=1., lowcut_hz=75., eq=1., compressio
           "reverb_return_adjustment_db":LONG_ROOM_RETURN_DB,"reverb_tail_boost_db":3.,
           "short_room_return_db":SHORT_ROOM_RETURN_DB,"short_room_predelay_ms":8,
           "mix_preset":MIX_PRESET,
-          "low_mid_duck_band_hz":list(LOW_MID_DUCK_BAND_HZ),"max_low_mid_duck_db":low_mid_reduction,
           "delay_wet":.025*space*delay_amount,
           "wet_duck_max_db":wet_duck_db if space else 0.,"reference_balance":balance_stats,
-          "duck_band_hz":[250,min(4000,sr*.45)],"max_band_duck_db":float(np.max(activity)*2.5*duck),
-          "max_broadband_duck_db":float(np.max(activity)*.6*duck)}
+          "duck_band_hz":[MID_DUCK_BAND_HZ[0],min(MID_DUCK_BAND_HZ[1],sr*.45)],
+          "max_band_duck_db":float(np.max(activity)*MID_DUCK_MAX_DB*duck),
+          "max_broadband_duck_db":0.,"max_low_mid_duck_db":0.}
 
 
 def measure_loudness(path):

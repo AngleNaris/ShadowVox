@@ -167,7 +167,7 @@ class PipelineMixTests(unittest.TestCase):
             self.assertEqual(rendered.shape,(len(vocal),2))
             self.assertEqual(output_sr,sr)
             self.assertTrue(np.isfinite(rendered).all())
-            preview = PreviewCache(capture, report, {'gains_db':[0,0]})
+            preview = PreviewCache(capture, report)
             with patch.object(mixing,'enhance',wraps=mixing.enhance) as draft_mix:
                 _, first = preview.render(opts,0,seconds=4)
             self.assertEqual(draft_mix.call_args.kwargs['duck'], opts.mix_duck)

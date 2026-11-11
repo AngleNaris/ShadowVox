@@ -247,17 +247,25 @@ def estimate_shift(dry_f0, ref_f0, strength=1.0, max_shift_cents=700.0,
         offset, pitch_err = _refine_by_pitch(dry_f0, ref_f0, None, radius_s=1.5)
     if reference_times is None:
         ref_map = _pitch_reference_map(d10, r10, nd, offset, band_seconds)
+        trusted = None
     else:
-        ref_map = np.asarray(reference_times) * F0_FPS
+        ref_map = np.asarray(reference_times, dtype=np.float64) * F0_FPS
         if ref_map.shape != (nd,) or reference_valid is None or np.shape(reference_valid) != (nd,):
             raise ValueError("外部音高对应需要等长的参考时标与可信掩码")
+        trusted = (np.asarray(reference_valid, dtype=bool) & np.isfinite(ref_map) &
+                   (ref_map >= 0) & (ref_map <= len(ref_f0)-1))
+        furthest = np.maximum.accumulate(np.where(trusted, ref_map, -np.inf))
+        trusted &= ref_map >= furthest - 1e-6
 
     ref_c = cent(ref_f0)
-    idx = np.clip(np.rint(ref_map).astype(np.int64), 0, len(ref_f0) - 1)
+    safe_map = np.clip(np.where(np.isfinite(ref_map), ref_map, 0.), 0, len(ref_f0)-1)
+    idx = np.rint(safe_map).astype(np.int64)
     target = ref_c[idx]
-    voiced = (dry_f0 > 0) & (ref_f0[idx] > 0)
-    if reference_times is not None:
-        voiced &= np.asarray(reference_valid, dtype=bool) & (ref_map >= 0) & (ref_map <= len(ref_f0)-1)
+    dry_voiced = dry_f0 > 0
+    reference_voiced = ref_f0[idx] > 0
+    voiced = dry_voiced & reference_voiced
+    if trusted is not None:
+        voiced &= trusted
 
     dry_c = cent(dry_f0)
     octave = np.rint((dry_c - target) / 1200.0)
@@ -270,14 +278,23 @@ def estimate_shift(dry_f0, ref_f0, strength=1.0, max_shift_cents=700.0,
 
     register_stats = {}
     if pitch_mode == "register":
-        from .register import register_shift
-        shift, reliable, octave = register_shift(dry_c, target, voiced, strength,
-                                                  min(max_shift_cents, 450), register_detail)
+        if trusted is None:
+            from .register import register_shift
+            shift, reliable, octave = register_shift(dry_c, target, voiced, strength,
+                                                      min(max_shift_cents, 450), register_detail)
+        else:
+            from .register import correspondence_shift
+            shift, reliable, octave, coverage = correspondence_shift(
+                dry_c, target, voiced, strength, min(max_shift_cents, 450), register_detail)
+            coverage.update(voiced_input_frames=int(dry_voiced.sum()),
+                            unmatched_reference_frames=int((dry_voiced & ~trusted).sum()),
+                            reference_unvoiced_frames=int((dry_voiced & trusted & ~reference_voiced).sum()),
+                            matched_voiced_frames=int(voiced.sum()))
+            register_stats['register_coverage'] = coverage
         confidence = reliable.astype(float)
-        register_stats = {"register_skipped_frames": int((voiced & ~reliable).sum()),
-                          "register_octave_counts": {
-                              str(int(k)): int(np.sum(octave[voiced] == k))
-                              for k in np.unique(octave[voiced])}}
+        register_stats.update(register_skipped_frames=int((voiced & ~reliable).sum()),
+                              register_octave_counts={str(int(k)): int(np.sum(octave[voiced] == k))
+                                                      for k in np.unique(octave[voiced])})
     elif pitch_mode == "natural":
         from .natural import center_shift
         shift = center_shift(dry_c, target_folded, voiced, strength, max_shift_cents)

@@ -17,17 +17,20 @@ class ComparisonPlayer:
         self.underflows = 0
         self.frames_written = 0
         self.levels = np.zeros(2, dtype=np.float32)
-        self.loop = None          # (起点帧, 终点帧)；播放到终点回到起点
+        self.equal_loudness = False
+        self.match_gains = (1., 1., 1.)
         self.delta = False        # 差值监听：当前版本减去修音前
 
     @property
     def frames(self):
         return len(self.tracks[0]) if self.tracks else 0
 
-    def load(self, tracks, sr):
+    def load(self, tracks, sr, gains_db=(0., 0.)):
         self.clear()
         self.tracks = tracks
         self.sr = sr
+        before, after = (10**(db/20) for db in gains_db)
+        self.match_gains = (before, after, after)
 
     def clear(self):
         self.pause()
@@ -37,7 +40,6 @@ class ComparisonPlayer:
         self.tracks = []
         self.position = 0
         self.selected = 0
-        self.loop = None
         self.delta = False
 
     def select(self, index):
@@ -66,10 +68,9 @@ class ComparisonPlayer:
         with self.lock:
             self.position = min(self.frames, max(0, round(seconds*self.sr)))
 
-    def set_loop(self, start, end):
+    def set_equal_loudness(self, enabled):
         with self.lock:
-            a, b = (min(self.frames, max(0, round(x*self.sr))) for x in (start, end))
-            self.loop = (a, b) if b - a >= self.sr * .05 else None
+            self.equal_loudness = enabled
 
     def play(self):
         if not self.tracks:
@@ -102,23 +103,19 @@ class ComparisonPlayer:
         with self.lock:
             if not self.playing:
                 return
-            written = 0
-            while written < frames:
-                end = self.frames
-                if self.loop and self.loop[0] <= self.position <= self.loop[1]:
-                    if self.position == self.loop[1]:
-                        self.position = self.loop[0]
-                    end = self.loop[1]
-                count = min(frames-written, end-self.position)
-                if count <= 0:
-                    self.playing = False
-                    break
-                part = self.tracks[self.selected][self.position:self.position+count]
+            count = min(frames, self.frames-self.position)
+            if count:
+                region = slice(self.position, self.position+count)
+                part = self.tracks[self.selected][region]
+                gains = self.match_gains if self.equal_loudness else (1., 1., 1.)
+                gain = gains[self.selected]
                 if self.delta and self.selected:
-                    part = part - self.tracks[0][self.position:self.position+count]
-                np.multiply(part, self.volume, out=outdata[written:written+count])
+                    part = part*gain - self.tracks[0][region]*gains[0]
+                    gain = 1.
+                np.multiply(part, self.volume*gain, out=outdata[:count])
                 self.position += count
-                written += count
+            if self.position >= self.frames:
+                self.playing = False
             # 电平表读取实际送往声卡的样本峰值（含音量）。
-            self.levels = np.abs(outdata[:written]).max(axis=0) if written else np.zeros(2, dtype=np.float32)
-            self.frames_written += written
+            self.levels = np.abs(outdata[:count]).max(axis=0) if count else np.zeros(2, dtype=np.float32)
+            self.frames_written += count

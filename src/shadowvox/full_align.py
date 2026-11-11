@@ -1,20 +1,16 @@
 """保守对齐：原声顺序、完整性和连续性优先于贴齐参考。
 
-Sync Toolbox 只提出候选位置。可信区域的位移在边界回到零，Rubber Band R3
+Sync Toolbox 只提出候选位置。可信区域的位移在边界回到零，Signalsmith
 只处理这些区域；其余波形逐采样保留，不切句、插空或移动后句来追赶路径。
 """
-import subprocess
-import tempfile
-from pathlib import Path
+from itertools import groupby
 
 import numpy as np
-import soundfile as sf
 from scipy.ndimage import distance_transform_edt, uniform_filter1d
 from scipy.signal import resample_poly
 
-from .audio import subprocess_options
 from .natural import runs
-from .rubberband import executable
+from .signalsmith import stretch
 
 FEATURE_SR, FEATURE_RATE = 22050, 50
 KEY_SECONDS = .1
@@ -63,25 +59,6 @@ def singing(audio, sr):
     rms = np.sqrt(np.mean(np.square(padded.reshape(count, hop), dtype=np.float64), axis=1))
     active = rms > .1 * np.percentile(rms, 90)
     return active | np.r_[active[1:], False] | np.r_[False, active[:-1]]
-
-
-def stretch(x, source, target, sr):
-    """R3 单次变时；拒绝会反转、重复或跳过源时间的映射。"""
-    frames = np.rint(np.c_[source * sr, target * sr]).astype(np.int64)
-    if (len(frames) < 2 or np.any(np.diff(frames, axis=0) <= 0) or
-            np.any(frames[0] != 0)):
-        raise ValueError("变时映射必须从零开始且两侧严格递增")
-    with tempfile.TemporaryDirectory(prefix="shadowvox-align-") as tmp:
-        tmp = Path(tmp)
-        sf.write(tmp / "input.wav", x, sr, subtype="FLOAT")
-        (tmp / "timemap.txt").write_text("\n".join(f"{a} {b}" for a, b in frames), encoding="ascii")
-        ratio = frames[-1, 1] / frames[-1, 0]
-        p = subprocess.run([executable(), "-3", "-t", f"{ratio:.8f}", "--timemap", "timemap.txt", "-q",
-                            "input.wav", "output.wav"], cwd=tmp, capture_output=True,
-                           **subprocess_options())
-        if p.returncode:
-            raise RuntimeError(p.stderr.decode(errors="replace"))
-        return sf.read(tmp / "output.wav", dtype="float32")[0]
 
 
 def _ordered(left, right):
@@ -276,15 +253,59 @@ def pitch_mapping(pieces, plan, frame_count, frame_rate=100., start_seconds=0.):
     return reference_times, valid
 
 
-def render_segments(dry, pieces, sr, start=0, end=None):
-    """整曲与草稿共用入口；中文模式连续变时，旧分段模式的保护片段直接旁路。"""
+def _render_phrase_timeline(dry, pieces, sr, start, end, checkpoint):
+    out = np.zeros(end-start,dtype=np.float32)
+    for pause,group in groupby(pieces,key=lambda p:p.get('pause',False)):
+        group = list(group)
+        source = np.concatenate([p['source'][:-1] for p in group]+[group[-1]['source'][-1:]])
+        target = np.concatenate([p['target'][:-1] for p in group]+[group[-1]['target'][-1:]])
+        src = np.rint(source*sr).astype(np.int64)
+        dst = np.rint(target*sr).astype(np.int64)
+        a,b = max(start,dst[0]),min(end,dst[-1])
+        if b <= a or src[-1] <= src[0]:
+            continue
+        x = dry[src[0]:src[-1]]
+        if np.array_equal(src-src[0],dst-dst[0]):
+            out[a-start:b-start] = x[a-dst[0]:b-dst[0]]
+            continue
+        if pause:
+            # Time is gained or returned only inside the protected, low-activity gaps.
+            samples = np.interp(np.arange(a,b),dst,src)-src[0]
+            out[a-start:b-start] = np.interp(samples,np.arange(len(x)),x)
+            continue
+        want = dst[-1]-dst[0]
+        same_rate = np.max(abs((source-source[0])-(target-target[0]))) < 1e-7
+        y = x.copy() if same_rate else stretch(x,(src-src[0])/sr,(dst-dst[0])/sr,sr,checkpoint=checkpoint)
+        if not same_rate:
+            fade = min(round(sr*FADE_SECONDS),len(y)//2,len(x)//2)
+            opposed = fade and any(np.dot(u.astype(float),v.astype(float)) < 0
+                                   for u,v in ((x[:fade],y[:fade]),(x[-fade:],y[-fade:])))
+            if abs(len(y)-want) > 2 or opposed:
+                y = x.copy()
+                for piece in group:
+                    piece['target'] = piece['source']+(target[0]-source[0])
+                    piece['protected'] = abs(piece['phrase_move']) < 1e-7
+                group[0]['render_fallback'] = 'opposed_boundary_phase' if opposed else 'phrase_render_length'
+            elif fade:
+                weight = np.linspace(0.,1.,fade,dtype=np.float32)
+                y[:fade] = x[:fade]*(1-weight)+y[:fade]*weight
+                y[-fade:] = x[-fade:]*weight+y[-fade:]*(1-weight)
+        y = np.pad(y[:want],(0,max(0,want-len(y))),mode='edge')
+        out[a-start:b-start] = y[a-dst[0]:b-dst[0]]
+    return out,[(float(p['target'][0]),float(p['target'][-1])) for p in pieces if p['protected']]
+
+
+def render_segments(dry, pieces, sr, start=0, end=None, *, checkpoint=None):
+    """整曲与草稿共用入口；中文模式优先在停顿两侧渲染完整唱句。"""
     end = round(pieces[-1]["target"][-1] * sr) if end is None else end
+    if pieces[0].get('phrase_timeline'):
+        return _render_phrase_timeline(dry,pieces,sr,start,end,checkpoint)
     if pieces[0].get('continuous'):
         source = np.concatenate([p['source'][:-1] for p in pieces]+[pieces[-1]['source'][-1:]])
         target = np.concatenate([p['target'][:-1] for p in pieces]+[pieces[-1]['target'][-1:]])
         origin = round(target[0]*sr)
         target -= target[0]
-        rendered = dry.copy() if np.max(abs(target-source)) < 1e-7 else stretch(dry,source,target,sr)
+        rendered = dry.copy() if np.max(abs(target-source)) < 1e-7 else stretch(dry,source,target,sr,checkpoint=checkpoint)
         if abs(len(rendered)-len(dry)) > 2:
             raise RuntimeError('中文对齐输出长度不符，已停止导出')
         rendered = np.pad(rendered,(0,max(0,len(dry)-len(rendered))),mode='edge')[:len(dry)]
@@ -312,22 +333,25 @@ def render_segments(dry, pieces, sr, start=0, end=None):
         if piece["protected"] or unchanged:
             y = x.copy()
         else:
-            y = stretch(x, local_src - src_lo, local_dst - lo, sr)
+            y = stretch(x, local_src - src_lo, local_dst - lo, sr, checkpoint=checkpoint)
             if abs(len(y) - want) > 2:
                 raise RuntimeError("变时输出长度不符，已停止导出以避免插入静音或截断人声")
             fade = min(round(sr * FADE_SECONDS), len(y), len(x))
-            # 相位相反时交叉淡化会压低连续人声，整段回退到原位原声。
-            if fade and any(np.dot(a.astype(float), b.astype(float)) < 0
-                            for a, b in ((x[:fade], y[:fade]), (x[-fade:], y[-fade:]))):
+            # 原声只在真实拼接点参与淡化，整条录音的边缘没有相邻片段。
+            join_left = lo == dst[0] and round(src_lo * sr) > 0
+            join_right = hi == dst[-1] and round(src_hi * sr) < len(dry)
+            opposed = fade and ((join_left and np.dot(x[:fade], y[:fade]) < 0)
+                                or (join_right and np.dot(x[-fade:], y[-fade:]) < 0))
+            if opposed:
                 y = x.copy()
                 piece['target'] = src + (dst[0] - src[0])
                 piece['protected'] = True
                 piece['render_fallback'] = 'opposed_boundary_phase'
                 fade = 0
             weight = np.linspace(0., 1., fade, dtype=np.float32)
-            if lo == dst[0] and fade:
+            if join_left and fade:
                 y[:fade] = x[:fade] * (1 - weight) + y[:fade] * weight
-            if hi == dst[-1] and fade:
+            if join_right and fade:
                 y[-fade:] = x[-fade:] * weight + y[-fade:] * (1 - weight)
         y = np.pad(y[:want], (0, max(0, want - len(y))), mode="edge")
         at = round(lo * sr) - start
@@ -398,7 +422,7 @@ def align(dry, reference, sr, use_lyrics=True, log=print, strength=1., capture=N
                      max_applied_shift_ms=round(shift*1000, 3), applied=bool(shift > 1e-4 or abs(offset) > 1e-4))
         stats['rate_clipped_ratio'] = (round(float(np.mean(np.abs(rates-1) >= stats['max_rate']-1e-7)), 3)
                                        if stats['max_rate'] else 0.)
-    stats.update(algorithm="conservative-lyrics+rubberband-r3-v2", runs=len(pieces),
+    stats.update(algorithm="conservative-lyrics+signalsmith-v1", runs=len(pieces),
                  lyric_anchors=len(anchors or []), rejected_lyric_anchors=len(candidates)-len(anchors or []),
                  alignment_basis="lyrics+audio" if anchors else ("audio" if anchors is None else "preserved"),
                  median_offset_seconds=float(offset), placement_offset_seconds=0.,

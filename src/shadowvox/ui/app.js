@@ -443,20 +443,17 @@ function onFailed(json) {
 /* ═══ 播放器 ═══ */
 const state = { ready: false, pos: 0, dur: 0, playing: false, sel: 2, delta: false, seeking: false };
 let versions = [], current = null, wave = null;
-const loop = { a: 0, b: 0, on: false, has: false };
 const SRC_NAMES = ['修音前', '草稿', '成品'];
 
 function resetResult() {
   state.ready = false; versions = []; current = null; wave = null;
-  Object.assign(loop, { on: false, has: false });
   $('#player').dataset.cache = 'empty'; renderPlayer(); renderVersions(); renderReport(null, 'none'); drawWave();
 }
 function renderPlayer() {
   const player = $('#player'), ready = state.ready && !!wave;
-  player.dataset.ready = ready; player.dataset.playing = state.playing && ready; player.dataset.loop = loop.on;
-  for (const id of ['#p-start', '#p-play', '#p-loop', '#seek']) $(id).disabled = !ready;
+  player.dataset.ready = ready; player.dataset.playing = state.playing && ready;
+  for (const id of ['#p-start', '#p-play', '#p-equal-loudness', '#seek']) $(id).disabled = !ready;
   $('#p-play').setAttribute('aria-label', state.playing ? '暂停' : '播放');
-  $('#p-loop').setAttribute('aria-pressed', String(loop.on));
   $$('.src[data-src]').forEach(b => {
     b.disabled = !ready || (+b.dataset.src === 1 && !switchOn($('#live-preview')));
     b.setAttribute('aria-pressed', String(!b.disabled && +b.dataset.src === state.sel));
@@ -469,7 +466,6 @@ function renderPlayer() {
   $('#p-total').textContent = ` / ${clock(state.dur)}`;
   if (!state.seeking) setHead(state.pos);
   moveGlider($('#p-sources'), $('.src[aria-pressed="true"]'), '.src-glider');
-  renderLoop();
 }
 function setHead(pos) {
   const track = $('#track'), x = state.dur ? pos / state.dur * track.clientWidth : 0;
@@ -553,64 +549,6 @@ function moveGlider(group, target, selector) {
   Object.assign(glider.style, to);
 }
 
-/* 循环带：拖空白创建，拖两端调整，拖中间移动；小于 3px 不算拖动 */
-function renderLoop() {
-  const region = $('#loop-region'), w = $('#loop-lane').clientWidth;
-  region.hidden = !loop.has || !state.dur;
-  if (region.hidden) return;
-  const l = loop.a / state.dur * w, r = loop.b / state.dur * w;
-  Object.assign(region.style, { left: `${l}px`, width: `${Math.max(2, r - l)}px` });
-  $('#loop-label').textContent = r - l >= 100 ? `${clock(loop.a)}–${clock(loop.b)}` : '';
-}
-function commitLoop(on = loop.on) {
-  loop.on = on && loop.has; bridge?.setLoop(loop.on, loop.a, loop.b); renderPlayer();
-}
-function bindLoopLane() {
-  const lane = $('#loop-lane'); let drag = null;
-  const timeAt = x => clamp((x - lane.getBoundingClientRect().left) / lane.clientWidth * state.dur, 0, state.dur);
-  lane.addEventListener('pointerdown', e => {
-    if (!state.ready || e.button !== 0) return;
-    const edge = e.target.dataset.edge, inRegion = e.target.closest('.loop-region');
-    drag = { x: e.clientX, mode: edge || (inRegion ? 'move' : 'new'), t0: timeAt(e.clientX), a: loop.a, b: loop.b, has: loop.has, moved: false };
-    lane.setPointerCapture(e.pointerId);
-  });
-  lane.addEventListener('pointermove', e => {
-    if (!drag) return;
-    if (!drag.moved && Math.abs(e.clientX - drag.x) < 3) return;
-    drag.moved = true;
-    const t = timeAt(e.clientX), len = drag.b - drag.a;
-    if (drag.mode === 'new') { loop.a = Math.min(drag.t0, t); loop.b = Math.max(drag.t0, t); loop.has = true; }
-    else if (drag.mode === 'a') loop.a = Math.min(t, loop.b - .05);
-    else if (drag.mode === 'b') loop.b = Math.max(t, loop.a + .05);
-    else { loop.a = clamp(drag.a + t - drag.t0, 0, state.dur - len); loop.b = loop.a + len; }
-    renderLoop();
-  });
-  const end = cancel => {
-    if (!drag) return;
-    if (!drag.moved || cancel || loop.b - loop.a < .05) Object.assign(loop, { a: drag.a, b: drag.b, has: drag.has });
-    else commitLoop(true);
-    drag = null; renderLoop();
-  };
-  lane.addEventListener('pointerup', () => end(false)); lane.addEventListener('pointercancel', () => end(true));
-  lane.addEventListener('dblclick', () => state.ready && openLoopEditor());
-  lane.addEventListener('keydown', e => {
-    if (!state.ready) return;
-    if (e.key === 'Enter') { openLoopEditor(); e.preventDefault(); return; }
-    if (!loop.has) return;
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      const len = loop.b - loop.a, d = (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 10 : 1);
-      loop.a = clamp(loop.a + d, 0, state.dur - len); loop.b = loop.a + len; commitLoop(); e.preventDefault();
-    } else if (e.key === 'Delete' || e.key === 'Backspace') { loop.has = false; commitLoop(false); e.preventDefault(); }
-  });
-}
-function parseClock(text) {
-  const m = /^\s*(?:(\d+):)?(\d+(?:\.\d+)?)\s*$/.exec(text); return m ? (+(m[1] || 0)) * 60 + (+m[2]) : NaN;
-}
-function openLoopEditor() {
-  $('#loop-a').value = clock(loop.has ? loop.a : 0, true); $('#loop-b').value = clock(loop.has ? loop.b : state.dur, true);
-  $('#loop-error').textContent = ''; openModal($('#loop-editor'), $('#loop-lane'));
-}
-
 /* 版本菜单：成品 V1…Vn，切换后试听与报告同步 */
 function renderVersions() {
   const menu = $('#ver-menu'); menu.textContent = '';
@@ -654,10 +592,12 @@ function onDraftState(json) {
 
 function bindPlayer() {
   $('#p-play').addEventListener('click', () => bridge.toggle());
-  $('#p-start').addEventListener('click', () => bridge.seek(loop.on ? loop.a : 0));
-  $('#p-loop').addEventListener('click', () => {
-    if (!loop.has) Object.assign(loop, { a: 0, b: state.dur, has: true });
-    commitLoop(!loop.on);
+  $('#p-start').addEventListener('click', () => bridge.seek(0));
+  const equalLoudness = $('#p-equal-loudness');
+  equalLoudness.addEventListener('click', () => {
+    const enabled = !switchOn(equalLoudness);
+    equalLoudness.setAttribute('aria-checked', String(enabled));
+    bridge.setEqualLoudness(enabled);
   });
   $('#p-delta').addEventListener('click', () => bridge.setDelta(!state.delta));
   $$('.src[data-src]').forEach(b => b.addEventListener('click', () => bridge.select(+b.dataset.src)));
@@ -676,7 +616,6 @@ function bindPlayer() {
   seek.addEventListener('input', () => { state.seeking = true; setHead(+seek.value); });
   seek.addEventListener('change', () => {
     const t = +seek.value; state.seeking = false; state.pos = t; bridge.seek(t);
-    if (loop.on && (t < loop.a || t > loop.b)) commitLoop(false);   // 跳出循环区间即关闭循环
   });
   const track = $('#track'); let tip = null;
   track.addEventListener('pointermove', e => {
@@ -693,7 +632,7 @@ function bindPlayer() {
     if (!state.ready) return;
     e.preventDefault(); bridge.toggle();
   }, true);
-  bindLoopLane(); bindVersionMenu();
+  bindVersionMenu();
 }
 
 /* ═══ 报告：共享 SVG、实际结果对比与社交图片导出 ═══ */
@@ -793,12 +732,6 @@ function bindModals() {
     btn.disabled = false; $('use', btn).setAttribute('href', ok ? '#i-check' : '#i-copy');
     btn.setAttribute('aria-label', ok ? '已复制' : '复制失败，重试'); announce(ok ? '已复制' : '复制失败');
     setTimeout(() => { if (btn._gen === gen) { $('use', btn).setAttribute('href', '#i-copy'); btn.setAttribute('aria-label', '复制错误信息'); } }, 1600);
-  });
-  $('#loop-form').addEventListener('submit', e => {
-    e.preventDefault();
-    const a = parseClock($('#loop-a').value), b = parseClock($('#loop-b').value);
-    if (!(a >= 0) || !(b <= state.dur + .001) || !(b - a >= .05)) { $('#loop-error').textContent = '请输入 分:秒，终点需晚于起点且不超过总长'; return; }
-    Object.assign(loop, { a, b: Math.min(b, state.dur), has: true }); commitLoop(true); closeModal($('#loop-editor'));
   });
 }
 function showError(message, detail) {

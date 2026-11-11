@@ -65,7 +65,7 @@ class AudioControlsTests(unittest.TestCase):
         clean = raw * .5
         capture = dict(options={'declip': True}, dry_input=raw, dry_before_denoise=raw,
                        denoised_dry=clean)
-        cache = PreviewCache(capture, {}, {'gains_db': [0, 0]})
+        cache = PreviewCache(capture, {})
         np.testing.assert_allclose(cache.source(Options(denoise_strength=0)), raw)
         np.testing.assert_allclose(cache.source(Options(denoise_strength=.5)), raw*.75)
         np.testing.assert_allclose(cache.source(Options(denoise_strength=1)), clean)
@@ -77,7 +77,7 @@ class AudioControlsTests(unittest.TestCase):
         clean = raw*.8
         bed = np.stack([.03*np.sin(2*np.pi*440*t)]*2).astype(np.float32)
         baseline = Options(strength=.75, rhythm=True, rhythm_mode='full', denoise=True,
-                           mix_effects=True, renderer='psola')
+                           mix_effects=True, renderer='signalsmith')
         times = np.arange(0., 8.01, .1)
         capture = dict(options=asdict(baseline), dry_input=raw, dry_before_denoise=raw,
             denoised_dry=clean, aligned_dry=clean, vocal=clean, inst=bed, inst_original=bed,
@@ -85,8 +85,7 @@ class AudioControlsTests(unittest.TestCase):
             shift_cents=np.full(801, 30., dtype=np.float32),
             rhythm_plan=dict(dry_t=times, ref_t=times*1.1, dry_seconds=8., ref_seconds=8.8,
                 voiced=np.ones(80, bool), anchors=None, offset=0., acoustic_trusted=None))
-        cache = PreviewCache(capture, {'mixing': {'master_gain_db': 0, 'target_lufs': -16}},
-                             {'gains_db': [0, 0]})
+        cache = PreviewCache(capture, {'mixing': {'master_gain_db': 0, 'target_lufs': -16}})
         _, normal = cache.render(baseline, 1., seconds=4)
         for opts in (replace(baseline, mix_eq=1.5), replace(baseline, strength=.5),
                      replace(baseline, rhythm_strength=.5, strength=0),
@@ -156,7 +155,7 @@ class DesktopBridgeTests(unittest.TestCase):
     def test_front_end_defaults_map_to_confirmed_options(self):
         from shadowvox.gui_bridge import options_from
         o = options_from(self.DEFAULTS)
-        self.assertEqual((o.strength, o.pitch_mode, o.renderer, o.rhythm_mode, o.max_shift_cents), (.75, 'register', 'psola', 'full', 450))
+        self.assertEqual((o.strength, o.pitch_mode, o.renderer, o.rhythm_mode, o.max_shift_cents), (.75, 'register', 'signalsmith', 'full', 450))
         self.assertEqual((o.mix_eq, o.mix_reverb, o.mix_lowcut_hz, o.target_lufs, o.true_peak_ceiling, o.vocal_gain_db), (1., 1., 75., -8., -.5, 0.))
         self.assertTrue(o.mix_effects and o.rhythm and o.denoise and o.declip and o.comparison)
         o = options_from({**self.DEFAULTS, 'mix_eq': 150, 'vocal_gain_db': -2.5, 'denoise': False})
@@ -175,22 +174,44 @@ class DesktopBridgeTests(unittest.TestCase):
                 (Path(folder)/name).write_bytes(b'')
             self.assertEqual(next_version(folder, '干声'), 4)
 
-    def test_player_loop_wraps_and_delta_subtracts_before(self):
+    def test_player_matches_levels_only_when_enabled_and_stops_at_end(self):
         from types import SimpleNamespace
         from shadowvox.player import ComparisonPlayer
         player = ComparisonPlayer(); player.volume = 1.
         ramp = np.repeat(np.arange(100, dtype=np.float32)[:, None], 2, axis=1)
-        player.tracks, player.sr = [ramp, ramp*2, ramp*3], 100
-        player.set_loop(.2, .3); player.seek(.25); player.playing = True
+        player.load([ramp, ramp*2, ramp*3], 100, 20*np.log10([.5, .25]))
+        player.select(2); player.seek(.25); player.playing = True
         out = np.zeros((20, 2), dtype=np.float32)
-        player._callback(out, 20, None, SimpleNamespace(output_underflow=False))
-        np.testing.assert_array_equal(out[:, 0], [25, 26, 27, 28, 29, *range(20, 30), 20, 21, 22, 23, 24])
-        player.loop = None; player.select(2); player.delta = True; player.seek(.5)
-        player._callback(out, 4, None, SimpleNamespace(output_underflow=False))
-        np.testing.assert_array_equal(out[:4, 0], [100, 102, 104, 106])   # 3x - x
-        player.delta = False; player.seek(.98)
-        player._callback(out, 4, None, SimpleNamespace(output_underflow=False))
+        status = SimpleNamespace(output_underflow=False)
+        self.assertFalse(player.equal_loudness)
+        player._callback(out, 4, None, status)
+        np.testing.assert_array_equal(out[:4, 0], 3*np.arange(25, 29))
+        player.set_equal_loudness(True)
+        player._callback(out, 4, None, status)
+        np.testing.assert_array_equal(out[:4, 0], .75*np.arange(29, 33))
+        player.select(1); player.delta = True
+        player._callback(out, 4, None, status)
+        np.testing.assert_array_equal(out[:4, 0], 0.)   # 2x × .25 - x × .5
+        player.set_equal_loudness(False); player.delta = False; player.seek(.98)
+        player._callback(out, 4, None, status)
+        np.testing.assert_array_equal(out[:2, 0], [196, 198])
         self.assertFalse(player.playing); np.testing.assert_array_equal(out[2:4, 0], [0, 0])
+
+    def test_preview_prepares_matching_gains_and_keeps_raw_samples(self):
+        from shadowvox.preview import prepare
+        sr = 16000
+        tone = (.2*np.sin(2*np.pi*220*np.arange(2*sr)/sr)).astype(np.float32)
+        before = np.column_stack((tone, tone))
+        after = before*.25
+        with tempfile.TemporaryDirectory() as folder:
+            a, b = (Path(folder)/name for name in ('before.wav','after.wav'))
+            sf.write(a, before, sr, subtype='FLOAT')
+            sf.write(b, after, sr, subtype='FLOAT')
+            tracks, rate, stats = prepare(a, b)
+        self.assertEqual(rate, sr)
+        np.testing.assert_array_equal(tracks[0], before)
+        np.testing.assert_array_equal(tracks[1], after)
+        self.assertAlmostEqual(stats['gains_db'][1]-stats['gains_db'][0], 12.04, delta=.05)
 
     def test_waveform_uses_stereo_energy_and_includes_tail(self):
         from shadowvox.gui_bridge import envelope, wave_values
@@ -198,7 +219,7 @@ class DesktopBridgeTests(unittest.TestCase):
         peak, rms = envelope(track, 2)
         np.testing.assert_allclose(peak, [.3, .9])
         np.testing.assert_allclose(rms, [.3/np.sqrt(2), .9/np.sqrt(6)])
-        values = wave_values(*envelope(track*.25), gain=4)
+        values = wave_values(*envelope(track))
         self.assertEqual(values['peak'], [.3, .3, 0., 0., .9])
 
 

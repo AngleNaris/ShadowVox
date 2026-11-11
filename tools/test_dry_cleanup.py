@@ -52,6 +52,25 @@ class DryCleanupTests(unittest.TestCase):
         shifted, _ = vocal_gate.mute_gaps(voice,spans,sr,start=-3200)
         np.testing.assert_array_equal(shifted[3200:],output[:-3200])
 
+    def test_gate_keeps_displaced_singing_and_leaves_isolated_speech_gap_muted(self):
+        sr = 16000
+        f0 = np.zeros(400)
+        f0[31:64] = np.linspace(120., 250., 33)
+        f0[116:217] = 220.
+        candidates = vocal_gate.source_melody_intervals(f0, 4*sr, sr)
+        self.assertEqual(len(candidates), 1)
+        reference = [(round(.91*sr), round(2.13*sr))]
+        pieces = [dict(source=np.array([0.,4.]),target=np.array([.05,4.05]))]
+        spans, _ = vocal_gate.keep_intervals(reference, candidates, sr, pieces=pieces, reference_shift=.05,
+                                             protected=[(2.8, 3.)])
+        vocal = np.ones(4*sr, dtype=np.float32)
+        rendered, _ = vocal_gate.mute_gaps(vocal, spans, sr)
+        self.assertEqual(rendered[round(2.20*sr)], 1.)
+        self.assertEqual(rendered[round(2.90*sr)], 1.)
+        self.assertEqual(rendered[round(.5*sr)], 0.)
+        clip, _ = vocal_gate.mute_gaps(vocal[2*sr:3*sr], spans, sr, start=2*sr)
+        np.testing.assert_array_equal(clip, rendered[2*sr:3*sr])
+
     def test_separation_feeds_denoise_and_final_and_draft_mute_only_vocal(self):
         sr = C.VOC_SR
         t = np.arange(4*sr)/sr
@@ -88,7 +107,7 @@ class DryCleanupTests(unittest.TestCase):
             final,_ = sf.read(output,dtype='float32')
             np.testing.assert_allclose(final[quiet],bed.T[quiet],atol=1e-4)
             self.assertGreater(float(np.max(np.abs(capture['vocal'][sr:2*sr]))),.1)
-            cache = PreviewCache(capture,report,{'gains_db':[0,0]})
+            cache = PreviewCache(capture,report)
             _, draft = cache.render(opts,2.)
             np.testing.assert_array_equal(draft[quiet],bed.T[quiet])
 

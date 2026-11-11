@@ -129,17 +129,53 @@ def summary_rows(report, metrics):
     if gap:
         duration = _value(gap.get('muted_seconds'), ' 秒')
         rows.append(('原唱空档静音', duration if gap.get('enabled') else '关闭'))
+        if gap.get('enabled') and 'retained_outside_reference_seconds' in gap:
+            rows.append(('静音保护额外保留', _value(gap['retained_outside_reference_seconds'], ' 秒')))
     visual = metrics.get('visual', {})
     pitch, timing = visual.get('pitch', {}), visual.get('timing', {})
     measured = []
     if pitch.get('available'):
         measured += [('实测音高偏差中位数', f"{pitch['before_median']:.1f} → {pitch['after_median']:.1f} 音分"),
                      ('共同有效音高帧', str(pitch['common_frames']))]
+    coverage = pitch.get('coverage')
+    if coverage:
+        measured.append(('原有有声帧的输出 F0 缺测', str(coverage['output_f0_missing_frames'])))
+        if 'output_near_silent_input_voiced_frames' in coverage:
+            measured.append(('原有有声帧的输出近静音', str(coverage['output_near_silent_input_voiced_frames'])))
+    register = align.get('register_coverage')
+    if register:
+        if 'large_note_protected_notes' in register:
+            measured.append(('大音差保护', f"{register['large_note_protected_notes']} 个音符 · "
+                             f"{register['large_note_protected_frames']} 帧保留原音高"))
+        else:
+            measured.append(('大偏差帧已纳入修正规划',
+                             f"{register['large_error_planned_frames']} / {register['large_error_frames']}"))
+        measured.append(('音高规划跳过帧', f"无对应 {register['unmatched_reference_frames']} · "
+                         f"参考无声 {register['reference_unvoiced_frames']} · 短段 {register['short_frames']} · "
+                         f"不稳定 {register['unstable_frames']} · 音区冲突 {register['register_conflict_frames']}"))
     if timing.get('available'):
         measured += [('实测入点偏差中位数', f"{timing['before_median_ms']:.0f} → {timing['after_median_ms']:.0f} ms"),
                      ('共同原唱入点', str(timing['paired_onsets']))]
+    if 'reference_onsets' in timing:
+        measured.append(('未匹配原唱入点（前 → 后）',
+                         f"{timing['before_unmatched_reference']} → {timing['after_unmatched_reference']} "
+                         f"（共 {timing['reference_onsets']} 个）"))
+    first = timing.get('first_reference_onset')
+    if first:
+        def onset_text(value):
+            return '未匹配' if value is None else f'{value:+.0f} ms'
+        measured.append(('首个原唱浊音入点（实测）', f"{onset_text(first['before_ms'])} → {onset_text(first['after_ms'])}"))
+    phrase = rhythm.get('first_phrase')
+    if phrase:
+        before_ms, after_ms = phrase.get('residual_before_ms'), phrase.get('residual_after_ms')
+        value = '首句对应不足' if before_ms is None or after_ms is None else f'{before_ms:+.0f} → {after_ms:+.0f} ms'
+        if phrase.get('onset_basis') == 'activity_supported_by_lyrics':
+            value += ' · 歌词与活动边界'
+        measured.append(('首句进点残差（规划）', value))
     rows = measured+rows
-    intervals = rhythm.get('protected_intervals_seconds', [])
+    intervals = rhythm.get('unmatched_intervals_seconds', rhythm.get('protected_intervals_seconds', []))
+    if coverage:
+        intervals = [*intervals, *coverage.get('output_near_silent_intervals_seconds', ())]
     if intervals:
         merged = []
         for start, end in sorted(intervals):

@@ -53,7 +53,7 @@ class ConservativeAlignmentTests(unittest.TestCase):
         pieces, _ = fa.plan_segments(src, dst, 10., 10., np.ones(100, bool), acoustic_trusted=evidence)
         self.assert_safe(pieces, 10.)
         raw = np.random.default_rng(5).uniform(.1, .3, 10*sr).astype(np.float32)
-        with patch.object(fa, 'stretch', side_effect=lambda x, *_: x.copy()):
+        with patch.object(fa, 'stretch', side_effect=lambda x, *_, **__: x.copy()):
             out, _ = fa.render_segments(raw, pieces, sr)
         np.testing.assert_array_equal(out[4*sr:6*sr], raw[4*sr:6*sr])
         self.assertGreater(out.min(), .09)  # 保护切换处不能淡出到零
@@ -162,14 +162,15 @@ class ConservativeAlignmentTests(unittest.TestCase):
         t = np.arange(4*sr)/sr
         raw = (.2*np.sin(2*np.pi*220*t)).astype(np.float32)
         src = grid(4.)
+        evidence = (src[:-1] >= .5) & (src[:-1] < 3.5)
         pieces, _ = fa.plan_segments(src, src+.1*np.sin(np.pi*src/4), 4., 4.,
-                                     np.ones(40, bool), acoustic_trusted=np.ones(40, bool))
-        with patch.object(fa, 'stretch', side_effect=lambda x, *_: -x):
+                                     np.ones(40, bool), acoustic_trusted=evidence)
+        with patch.object(fa, 'stretch', side_effect=lambda x, *_, **__: -x):
             out, protected = fa.render_segments(raw, pieces, sr)
         np.testing.assert_array_equal(out, raw)
         self.assertTrue(protected)
         self.assertTrue(pieces[0]['protected'])
-        self.assertEqual(pieces[0]['render_fallback'], 'opposed_boundary_phase')
+        self.assertTrue(any(p.get('render_fallback') == 'opposed_boundary_phase' for p in pieces))
 
     def test_psola_bypasses_zero_and_uncertain_regions_exactly(self):
         sr = 16000
@@ -189,7 +190,7 @@ class ConservativeAlignmentTests(unittest.TestCase):
         bed = np.zeros((2,len(raw)), dtype=np.float32)
         capture = dict(options=asdict(opts), dry_input=raw, inst=bed, inst_original=bed,
                        reference_original=raw, vocal_normalization=1., move=0., rhythm_plan={'offset':-.35})
-        cache = PreviewCache(capture, {}, {'gains_db':[0,0]})
+        cache = PreviewCache(capture, {})
         start, out = cache.render(replace(opts,rhythm=False), 0, seconds=4)
         self.assertEqual(start, 0)
         np.testing.assert_array_equal(out[:,0], raw)

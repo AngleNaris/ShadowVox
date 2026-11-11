@@ -35,6 +35,43 @@ def reference_intervals(vocal, f0, sr):
     return intervals
 
 
+def source_melody_intervals(f0, samples, sr):
+    """保护有持续音高证据的演唱，即使它落在原唱空档。"""
+    hop = sr/C.F0_FRAME_RATE
+    window = round(.22*C.F0_FRAME_RATE)
+    intervals = []
+    for begin, end in runs(np.asarray(f0) > 0):
+        if end-begin < window:
+            continue
+        cents = 1200*np.log2(f0[begin:end])
+        notes = np.lib.stride_tricks.sliding_window_view(cents, window)
+        if np.min(np.ptp(notes, axis=1)) > 160:
+            continue
+        intervals.append((max(0, round(begin*hop-.09*sr)), min(samples, round(end*hop+.13*sr))))
+    return intervals
+
+
+def keep_intervals(reference, source, sr, *, pieces=None, move=0., reference_shift=0., protected=()):
+    """合并原唱、原始干声旋律与可信残差保护，统一到混音时间轴。"""
+    front, placement = round(reference_shift*sr), round(move*sr)
+    ref = [(a+front, b+front) for a,b in reference]
+    if pieces and source:
+        origins = np.concatenate([p['source'] for p in pieces])
+        targets = np.concatenate([p['target'] for p in pieces])
+        source = np.rint(np.interp(np.asarray(source)/sr, origins, targets)*sr).astype(int)
+    extra = [(int(a)+placement, int(b)+placement) for a,b in source]
+    extra.extend((round(a*sr)+placement, round(b*sr)+placement) for a,b in protected)
+    merged = []
+    for a,b in sorted(ref+extra):
+        if b <= a:
+            continue
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a,b))
+    return merged, ref
+
+
 def mute_gaps(vocal, intervals, sr, start=0):
     """start 是本段首样本在原唱时间轴的位置；整轨和局部片段使用相同淡入淡出。"""
     result = np.zeros_like(vocal)

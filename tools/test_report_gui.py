@@ -32,7 +32,7 @@ def main():
     base.OUT = OUT
     saved = json.loads((ACTUAL/'青花瓷_报告验证.report.json').read_text(encoding='utf-8'))
     payload = visual_payload(saved,saved['audio_analysis'],1,saved['output'])
-    tracks,sr,_ = prepare(saved['comparison_before'],saved['output'])
+    tracks,sr,stats = prepare(saved['comparison_before'],saved['output'])
     h = base.Harness(); w = h.window
     h.until('bridge !== null',20)
     second = OUT/'same_settings_V2.wav'
@@ -42,7 +42,7 @@ def main():
     payload2.update(version=2,path=str(second),name=second.name)
     w.bridge.versions = {1:dict(before=saved['comparison_before'],audio=saved['output'],report=payload),
                         2:dict(before=saved['comparison_before'],audio=str(second),report=payload2)}
-    w.bridge.load_tracks(1,tracks,sr,select=2)
+    w.bridge.load_tracks(1,tracks,sr,stats['gains_db'],select=2)
     h.js('versions = '+json.dumps([dict(n=i,name=p['name'],path=p['path']) for i,p in ((1,payload),(2,payload2))],ensure_ascii=False)+'; current=1; state.ready=true; renderVersions(); 1')
     h.js('renderReport('+json.dumps(payload,ensure_ascii=False)+', "reveal"); switchTab("report"); 1')
     h.wait(700)

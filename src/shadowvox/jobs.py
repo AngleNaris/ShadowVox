@@ -5,7 +5,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from .signalsmith import ENGINE
+
 AUDIO_EXTS = {'.wav', '.mp3', '.flac', '.m4a', '.aac', '.ogg', '.aiff', '.wma'}
+DESKTOP_RENDERER = ENGINE
 DEFAULT_PARAMS = dict(correction=50, beauty=50, fusion=50, ratio=0, mixdown=100,
                       mix_effects=True, dry_has_backing=False)
 
@@ -38,7 +41,7 @@ def options_from(p):
                          or (p['denoise'] and p['denoise_strength']) or p['declip'])
     return Options(strength=p['strength']/100, pitch_mode='register', max_shift_cents=450, register_detail=detail,
         octave='auto', rhythm=bool(p['rhythm']), rhythm_strength=p['rhythm_strength']/100,
-        mix=True, mix_effects=bool(p['mix_effects']), comparison=True, renderer='psola',
+        mix=True, mix_effects=bool(p['mix_effects']), comparison=True, renderer=DESKTOP_RENDERER,
         rhythm_mode='full', rhythm_max_rate=rate, denoise=bool(p['denoise']), denoise_strength=p['denoise_strength']/100,
         declip=bool(p['declip']), vocal_gain_db=float(p['vocal_gain_db']), mix_space=1.,
         mix_lowcut_hz=float(p['mix_lowcut_hz']), mix_eq=p['mix_eq']/100,
