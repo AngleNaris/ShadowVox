@@ -1,126 +1,930 @@
 <!doctype html>
 <html lang="zh-CN">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATUNE 是怎么修音的</title>
+<title>ShadowVox · 从演唱录音到成品</title>
 <style>
-*{box-sizing:border-box;border-radius:0}
-:root{--base:#fffafb;--surface:#fff1f6;--field:#fff;--text:#261e2a;--muted:#655563;--line:#ecd1dc;--accent:#b52f68}
-body{margin:0;background:var(--base);color:var(--text);font:17px/1.8 "Microsoft YaHei UI","PingFang SC",system-ui,sans-serif}
-main{max-width:920px;margin:0 auto;padding:40px 24px 72px}
-header{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:32px}
-h1{font:700 30px/1.3 "Microsoft YaHei UI",sans-serif;margin:0 0 8px}
-.lead{color:var(--muted);margin:0}
-h2{font-size:21px;margin:48px 0 16px;display:flex;gap:12px;align-items:baseline}
-h2 .idx{color:var(--accent);font:700 15px Consolas,monospace}
-p{margin:0 0 12px}
-.tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
-.tile{background:var(--surface);border:1px solid var(--line);padding:18px 20px}
-.tile .label{color:var(--muted);font-size:15px}
-.tile .value{font-size:34px;font-weight:700;line-height:1.3}
-.tile .hint{color:var(--muted);font-size:14px}
-/* 步骤 + 耗时条（条形按 30 秒满格） */
-.steps{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
-.step{display:grid;grid-template-columns:40px minmax(0,1fr) 260px;gap:8px 20px;padding:18px 0;border-bottom:1px solid var(--line);outline:0}
-.step .n{color:var(--accent);font:700 20px/1.4 Consolas,monospace}
-.step h3{font-size:18px;margin:0 0 4px}
-.step p{margin:0;font-size:16px}
-.time{align-self:start;padding-top:4px;position:relative}
-.time .sec{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
-.track{height:10px;background:var(--line);margin-top:6px}
-.bar{height:10px;background:var(--accent)}
-.tip{position:absolute;right:0;top:100%;margin-top:6px;z-index:2;background:var(--text);color:#fff;font-size:14px;line-height:1.5;padding:6px 10px;white-space:nowrap;opacity:0;transform:translateY(-4px);transition:opacity .15s,transform .15s;pointer-events:none}
-.step:hover .tip,.step:focus-visible .tip{opacity:1;transform:none}
-.step:focus-visible{background:var(--surface)}
-.scale{display:grid;grid-template-columns:40px minmax(0,1fr) 260px;gap:0 20px;color:var(--muted);font-size:13px;padding-top:6px}
-.scale .ticks{grid-column:3;position:relative;height:20px}
-.scale .ticks span{position:absolute;transform:translateX(-50%);white-space:nowrap}
-.scale .ticks span:first-child{transform:none}.scale .ticks span:last-child{transform:translateX(-100%)}
-.points{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
-.point{background:var(--surface);border:1px solid var(--line);padding:18px 20px}
-.point h3{font-size:17px;margin:0 0 6px}
-.point p{margin:0;font-size:16px}
-table{width:100%;border-collapse:collapse;background:var(--field);font-size:16px}
-th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
-th{background:var(--surface);font-weight:600}
-.note{color:var(--muted);font-size:14px;margin-top:12px}
-footer{margin-top:56px;border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:14px}
-@media (prefers-reduced-motion:reduce){.tip{transition:none}}
-@media (max-width:720px){.step,.scale{grid-template-columns:32px minmax(0,1fr)}.time,.scale .ticks{grid-column:2}.tiles,.points{grid-template-columns:1fr}}
+:root {
+  color-scheme: light;
+  --page: #edf0f2;
+  --plate: #fff;
+  --wash: #f2f4f6;
+  --ink: #0e1317;
+  --ink-2: #4b5762;
+  --line: #6f7b86;
+  --grid: #d5dae0;
+  --band: #e4e9ed;
+  --hatch: #c4cbd3;
+  --signal: #fc3d21;
+  --font-ui: Bahnschrift, "Helvetica Neue", Arial, "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  --s1: .5rem;
+  --s2: 1rem;
+  --s3: 1.5rem;
+  --s4: 2.5rem;
+  --s5: 4rem;
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: var(--s3); }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 1rem/1.72 var(--font-ui);
+}
+main { max-width: 79rem; margin-inline: auto; padding: var(--s4) clamp(1rem, 4vw, 3.75rem) var(--s5); }
+h1, h2, p, figure, dl, dd, ul, ol { margin: 0; }
+ul, ol { padding: 0; list-style: none; }
+h1 { font-size: clamp(2.25rem, 6vw, 4.5rem); line-height: 1.12; letter-spacing: -.01em; }
+h2 { font-size: clamp(1.5rem, 3vw, 2.25rem); line-height: 1.3; }
+a { color: var(--ink); text-decoration-thickness: .08em; text-underline-offset: .23em; overflow-wrap: anywhere; }
+a:hover { text-decoration-color: var(--signal); text-decoration-thickness: .16em; }
+a:focus-visible { outline: none; background: var(--ink); color: var(--plate); text-decoration: underline .18em; }
+.canvas:focus-visible { outline: none; border-block-start-color: var(--signal); }
+@media (forced-colors: active) {
+  a:focus-visible { text-decoration-color: LinkText; }
+  .canvas:focus-visible, .stages a:focus-visible { border-block-start-color: CanvasText; }
+}
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.mast {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3);
+  padding-bottom: var(--s1); border-bottom: 4px solid var(--ink);
+  font-size: .875rem; color: var(--ink-2);
+}
+.mast strong { color: var(--ink); font-size: 1.0625rem; letter-spacing: .22em; text-transform: uppercase; }
+.hero { display: grid; gap: var(--s2); padding-block: var(--s4) var(--s3); }
+.lead { max-width: 43rem; color: var(--ink-2); font-size: clamp(1rem, 2vw, 1.2rem); }
+.stages { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0 var(--s3); }
+.stages a {
+  display: grid; align-content: start; gap: .2rem; min-height: 2.75rem;
+  padding: .65rem 0 .8rem; border-top: 3px solid var(--ink);
+  color: var(--ink); text-decoration: none;
+}
+.stages .n { color: var(--ink-2); font: 700 .8125rem/1 var(--font-mono); letter-spacing: .08em; }
+.stages a:hover { border-top-color: var(--signal); }
+.stages a:hover span:last-child { text-decoration: underline; text-underline-offset: .23em; }
+.stages a:focus-visible { border-top: 8px solid var(--signal); padding-top: calc(.65rem - 5px); background: none; color: var(--ink); text-decoration: none; }
+.stages a:focus-visible span:last-child { text-decoration: underline .18em; text-underline-offset: .23em; }
+.fig { margin-top: var(--s3); }
+.plate { background: var(--plate); border: 2px solid var(--ink); }
+.plate-head { display: flex; align-items: stretch; border-bottom: 1px solid var(--ink); }
+.fig-id {
+  display: flex; align-items: center; padding: 0 var(--s2);
+  background: var(--ink); color: var(--plate);
+  font: 700 .8125rem/1 var(--font-mono); letter-spacing: .08em;
+}
+.plate-title { flex: 1; padding: .6rem var(--s2); font-weight: 700; line-height: 1.4; }
+.plate-flag {
+  display: flex; align-items: center; padding: 0 var(--s2);
+  border-left: 1px solid var(--ink); color: var(--ink-2); font-size: .8125rem; white-space: nowrap;
+}
+.key {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .4rem var(--s3);
+  padding: .6rem var(--s2); border-bottom: 1px solid var(--grid);
+  color: var(--ink-2); font-size: .8125rem; line-height: 1.3;
+}
+.key li { display: flex; align-items: center; gap: .5rem; }
+.key svg { flex: none; width: 2.75rem; height: .75rem; overflow: visible; }
+.key .nk { width: 1.75rem; height: 1rem; }
+.scroll-hint { display: none; padding: .5rem var(--s2); border-bottom: 1px solid var(--grid); color: var(--ink-2); font-size: .8125rem; }
+.canvas { max-width: 100%; overflow-x: auto; border-block-start: 4px solid transparent; }
+.canvas svg { display: block; width: 100%; min-width: 58.75rem; height: auto; }
+.io { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr); border-top: 1px solid var(--ink); }
+.io > div { padding: var(--s1) var(--s2) .75rem; border-left: 1px solid var(--ink); }
+.io > div:first-child { border-left: 0; }
+.io dt { color: var(--ink-2); font: 600 .8125rem/1.4 var(--font-mono); letter-spacing: .08em; }
+.io dd { margin-top: .15rem; font-size: .9375rem; line-height: 1.55; }
+.fig > figcaption { margin-top: var(--s1); color: var(--ink-2); font-size: .875rem; }
+.chapter, .closing { margin-top: var(--s5); padding-top: var(--s2); border-top: 4px solid var(--ink); }
+.chapter-head { display: flex; align-items: baseline; gap: var(--s3); margin-bottom: var(--s3); }
+.number { color: var(--signal); font: 700 clamp(2.5rem, 6vw, 4rem)/1 var(--font-ui); letter-spacing: -.02em; }
+.chapter .fig { margin-top: 0; }
+.notes {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: var(--s3) var(--s4); margin-top: var(--s3);
+}
+.notes > * { padding-top: .75rem; border-top: 1px solid var(--line); }
+.closing h2 { margin-bottom: var(--s3); }
+.closing .notes { margin-top: 0; }
+.credits { margin-top: var(--s5); padding-top: var(--s2); border-top: 4px solid var(--ink); }
+.credits-lead { max-width: 43rem; margin-top: var(--s1); color: var(--ink-2); }
+.credit-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: var(--s3) var(--s4); margin-top: var(--s3); }
+.credit-group { padding-top: .75rem; border-top: 1px solid var(--line); }
+.credit-group h3 { margin: 0 0 var(--s1); font-size: 1rem; line-height: 1.4; }
+.credit-group h3 .n { margin-right: .5rem; color: var(--ink-2); font: 700 .8125rem/1 var(--font-mono); letter-spacing: .08em; }
+.credit-group li + li { margin-top: .75rem; }
+.credit-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 .75rem; }
+.credit-head a { font-weight: 700; }
+.lic { color: var(--ink-2); font: .8125rem/1.5 var(--font-mono); }
+.credit-group p { margin-top: .1rem; font-size: .9375rem; line-height: 1.6; }
+footer { margin-top: var(--s4); padding-top: var(--s2); border-top: 1px solid var(--ink); color: var(--ink-2); font-size: .875rem; }
+footer p + p { margin-top: var(--s1); }
+/* 图板画法：红粗实线＝主信号，墨实线＝原曲与伴奏，虚线＝分析与参考，点线＝控制；节点分输入、处理、参考、输出四种 */
+svg text { fill: var(--ink); font-family: var(--font-ui); font-size: 14px; }
+svg .t-h { font-size: 15px; font-weight: 700; }
+svg .t-s { fill: var(--ink-2); font-size: 13px; font-weight: 400; }
+svg .t-m { fill: var(--ink-2); font: 600 11.5px var(--font-mono); letter-spacing: .06em; }
+svg .t-w { fill: #fff; }
+svg .ln { fill: none; stroke-linejoin: miter; }
+svg .ln-sig { stroke: var(--signal); stroke-width: 2.5; marker-end: url(#ah-sig); }
+svg .ln-aud { stroke: var(--ink); stroke-width: 2; marker-end: url(#ah-ink); }
+svg .ln-ref { stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 7 4; marker-end: url(#ah-ref); }
+svg .ln-ctl { stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 1.5 3.5; marker-end: url(#ah-ref); }
+svg .a-sig { fill: var(--signal); }
+svg .a-ink { fill: var(--ink); }
+svg .a-ref { fill: var(--ink-2); }
+svg .hatch { stroke: var(--line); stroke-width: 1; }
+svg .lane-a { fill: var(--plate); }
+svg .lane-b { fill: var(--wash); }
+svg .rule { fill: none; stroke: var(--ink); stroke-width: 1; }
+svg .lt { fill: var(--ink); }
+svg .dot { fill: var(--ink-2); }
+svg .dot-sig { fill: var(--signal); }
+svg .dot-ink { fill: var(--ink); }
+svg .frame { fill: var(--plate); stroke: var(--ink); stroke-width: 1.5; stroke-linejoin: miter; }
+svg .n-in .frame { fill: var(--ink); }
+svg .n-out .frame { fill: var(--signal); }
+svg .n-ref .frame { stroke: var(--line); stroke-dasharray: 6 4; }
+svg .bar-sig { fill: var(--signal); }
+svg .bar-ink { fill: var(--ink); }
+svg .win { fill: var(--wash); stroke: var(--grid); stroke-width: 1; }
+svg .n-in .win { fill: none; stroke: var(--ink-2); }
+svg .n-out .win { fill: none; stroke: var(--ink); }
+svg .n-in .t-h { fill: #fff; }
+svg .n-in .t-s, svg .n-in .t-m { fill: #c9d0d6; }
+svg .n-out .t-h, svg .n-out .t-s, svg .n-out .t-m { fill: var(--ink); }
+svg .gl { color: var(--ink); }
+svg .n-in .gl { color: #fff; }
+svg .n-ref .gl { color: var(--ink-2); }
+svg .gs, svg .gb, svg .gr, svg .gg, svg .gt, svg .gk { fill: none; stroke-width: 1.5; }
+svg .gs { stroke: currentColor; }
+svg .gb { stroke: var(--line); }
+svg .gr { stroke: var(--ink-2); }
+svg .gg { stroke: var(--signal); }
+svg .gt { stroke: var(--ink-2); stroke-width: 1; }
+svg .gk { stroke: currentColor; stroke-width: 1.2; }
+svg .gd { stroke-dasharray: 2 2; }
+svg .gc { fill: var(--plate); stroke: currentColor; stroke-width: 1.2; }
+svg .hatch-l { stroke: var(--hatch); stroke-width: 1; }
+svg .halo { paint-order: stroke; stroke: var(--plate); stroke-width: 4px; stroke-linejoin: round; }
+/* 章节图板：示波窗、算子、片段、曲线 */
+svg .sf { fill: var(--wash); stroke: var(--line); stroke-width: 1; }
+svg .sf-w { fill: var(--plate); }
+svg .tab-in { fill: var(--ink); }
+svg .tab-out { fill: var(--signal); }
+svg .t-m.tab-t-in { fill: #fff; }
+svg .t-m.tab-t-out { fill: var(--ink); }
+svg .brk { fill: none; stroke: var(--ink-2); stroke-width: 1.5; }
+svg .cyl { fill: var(--plate); stroke: var(--ink-2); stroke-width: 1.5; }
+svg .ln-cache { fill: none; stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 1.5 3.5; }
+svg .ln-dim { fill: none; stroke: var(--ink); stroke-width: 1.5; marker-end: url(#ah-ink); }
+svg .ln-both { marker-start: url(#ah-ink); }
+svg .rail { fill: var(--wash); }
+svg .band { fill: var(--band); }
+svg .card { fill: var(--plate); stroke: var(--line); stroke-width: 1; }
+svg .clip { fill: var(--plate); stroke: var(--ink); stroke-width: 1.5; }
+svg .lk { fill: none; stroke: var(--ink-2); stroke-width: 1.2; stroke-dasharray: 4 3; }
+svg .ldr { fill: none; stroke: var(--ink-2); stroke-width: 1; }
+svg .anc { fill: var(--ink); }
+svg .curve { fill: none; stroke: var(--signal); stroke-width: 2.5; stroke-linejoin: round; }
+svg .zero, svg .tick { fill: none; stroke: var(--ink); stroke-width: 1; }
+svg .axis { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+svg .grid { fill: none; stroke: var(--grid); stroke-width: 1; }
+svg .note { fill: var(--plate); stroke: var(--ink-2); stroke-width: 1.5; }
+svg .pc-ink { fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-linejoin: round; }
+svg .pc-red { fill: none; stroke: var(--signal); stroke-width: 2.5; stroke-linejoin: round; }
+svg .pc-diff { fill: none; stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 5 3; }
+svg .strip { fill: var(--line); }
+.key .band { stroke: var(--line); stroke-width: 1; }
+@media (max-width: 64rem) {
+  .scroll-hint { display: block; }
+}
+@media (max-width: 48rem) {
+  .io { grid-template-columns: minmax(0, 1fr); }
+  .io > div { border-left: 0; border-top: 1px solid var(--grid); }
+  .io > div:first-child { border-top: 0; }
+}
+@media (max-width: 43rem) {
+  .stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plate-head { flex-wrap: wrap; }
+  .fig-id { padding-block: .6rem; }
+  .plate-flag { margin-left: auto; }
+  .plate-title { order: 3; flex-basis: 100%; border-top: 1px solid var(--ink); }
+  main { padding-top: var(--s3); }
+  .hero { padding-top: var(--s3); }
+  .chapter, .closing { margin-top: var(--s4); }
+}
 </style>
+</head>
+<body>
+<svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false"><defs>
+<marker id="ah-sig" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="a-sig" d="M0 0L10 5L0 10Z"/></marker>
+<marker id="ah-ink" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="a-ink" d="M0 0L10 5L0 10Z"/></marker>
+<marker id="ah-ref" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="a-ref" d="M0 0L10 5L0 10Z"/></marker>
+<pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path class="hatch" d="M0 0H6"/></pattern>
+<pattern id="hatch-l" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path class="hatch-l" d="M0 0H6"/></pattern>
+</defs></svg>
 <main>
 <header>
-  <h1>ATUNE 是怎么修音的</h1>
-  <p class="lead">你给它两样东西：<b>原曲</b>（带原唱和伴奏的歌）和<b>你自己唱的干音</b>。它会参照原唱，把你唱得不准的音调准、把节奏对齐，再配上伴奏混成一首完整的歌。整个过程都在你自己的电脑上完成，不会上传。</p>
+  <div class="mast"><strong>ShadowVox</strong><span>桌面版处理原理</span></div>
+  <div class="hero">
+    <h1>从演唱录音到成品</h1>
+    <p class="lead">导入你的演唱和带原唱的原曲，点击「VOX!」。ShadowVox 在本机从原曲提取音高和节奏参考，再调整你的演唱，配上分离出的伴奏。</p>
+  </div>
+  <nav aria-label="处理阶段">
+    <ol class="stages">
+      <li><a href="#inputs"><span class="n">01</span> <span>输入与分离</span></a></li>
+      <li><a href="#timing"><span class="n">02</span> <span>节奏对齐</span></a></li>
+      <li><a href="#pitch"><span class="n">03</span> <span>音高修正</span></a></li>
+      <li><a href="#mix"><span class="n">04</span> <span>混音与母带</span></a></li>
+      <li><a href="#output"><span class="n">05</span> <span>试听与导出</span></a></li>
+    </ol>
+  </nav>
 </header>
 
-<h2><span class="idx">01</span>要花多久</h2>
-<div class="tiles">
-  <div class="tile"><div class="label">第一次处理一首歌</div><div class="value">约 1 分钟</div><div class="hint">需要先把原曲拆成人声和伴奏</div></div>
-  <div class="tile"><div class="label">同一首歌再处理</div><div class="value">约 50 秒</div><div class="hint">拆好的人声和伴奏会被记住，直接复用</div></div>
+<figure class="fig" id="overview">
+  <div class="plate">
+    <div class="plate-head"><span class="fig-id">FIG.00</span><p class="plate-title">从两路输入到整曲导出的信号总览</p><span class="plate-flag">示意 · 非实测</span></div>
+    <ul class="key" aria-label="信号图图例">
+      <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-sig" d="M0 6H44"/></svg>主信号链：演唱到成品</li>
+      <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-aud" d="M0 6H44"/></svg>原曲与伴奏音频</li>
+      <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-ref" d="M0 6H44"/></svg>分析与参考</li>
+      <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><g class="node n-in"><path class="frame" d="M1 1H21L27 7V15H1Z"/></g></svg>输入</li>
+      <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><g class="node n-proc"><path class="frame" d="M1 1H21L27 7V15H1Z"/><path class="bar-sig" d="M1 1H21V5H1Z"/></g></svg>处理</li>
+      <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><g class="node n-ref"><path class="frame" d="M1 1H21L27 7V15H1Z"/></g></svg>参考</li>
+      <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><g class="node n-out"><path class="frame" d="M1 1H21L27 7V15H1Z"/></g></svg>输出</li>
+    </ul>
+    <p class="scroll-hint">图板可横向滚动，继续查看右侧处理节点。</p>
+    <div class="canvas" tabindex="0" role="region" aria-label="信号总览图，可横向滚动"><svg viewBox="0 0 1000 400" role="img" aria-labelledby="fig00-t fig00-d">
+<title id="fig00-t">从两路输入到整曲导出的信号总览</title>
+<desc id="fig00-d">演唱经过清理、节奏和音高处理后进入混音。原曲分出的原唱为节奏和音高分析提供参考，伴奏独立进入混音。混音经过母带处理后生成成品，另有试听和报告分支。</desc>
+<rect class="lane-a" width="1000" height="150"/>
+<rect class="lane-b" y="232" width="1000" height="168"/>
+<path class="rule" d="M0 150H1000M0 232H1000"/>
+<rect class="lt" x="20" y="8" width="16" height="16"/>
+<text class="t-m t-w" x="28" y="20" text-anchor="middle">A</text>
+<text class="t-s" x="44" y="21">演唱信号 · 主信号链</text>
+<rect class="lt" x="20" y="240" width="16" height="16"/>
+<text class="t-m t-w" x="28" y="252" text-anchor="middle">B</text>
+<text class="t-s" x="44" y="253">原曲 · 参考与伴奏</text>
+<path class="ln ln-sig" d="M155 70H185"/>
+<path class="ln ln-sig" d="M320 70H350"/>
+<path class="ln ln-sig" d="M485 70H515"/>
+<path class="ln ln-sig" d="M650 70H680"/>
+<path class="ln ln-sig" d="M815 70H845"/>
+<path class="ln ln-sig" d="M912.5 130V266"/>
+<path class="ln ln-aud" d="M155 302H185"/>
+<path class="ln ln-aud" d="M320 302H350"/>
+<path class="ln ln-aud" d="M485 302H515"/>
+<path class="ln ln-aud" d="M252.5 362V388H747.5V130"/>
+<path class="ln ln-ref" d="M582.5 266V130"/>
+<path class="ln ln-ref" d="M582.5 196H417.5V130"/>
+<g class="node n-in" data-node="a1"><path class="frame" d="M20 34H146L155 43V130H20Z"/><text class="t-m" x="30" y="49">IN</text><rect class="win" x="30" y="54" width="115" height="32"/><g class="gl" transform="translate(30 54)"><path class="gs" d="M1.8 15V17M5.2 14V18M8.8 13V19M12.2 11V21M15.8 9V23M19.2 8V24M22.8 9V23M26.2 10V22M29.8 12V20M33.2 14V18M36.8 15V17M40.2 14V18M43.8 12V20M47.2 9V23M50.8 6V26M54.2 4V28M57.8 3V29M61.2 5V27M64.8 7V25M68.2 9V23M71.8 11V21M75.2 13V19M78.8 15V17M82.2 14V18M85.8 12V20M89.2 10V22M92.8 7V25M96.2 5V27M99.8 6V26M103.2 9V23M106.8 12V20M110.2 14V18M113.8 15V17"/></g><text class="t-h" x="30" y="106">演唱录音</text><text class="t-s" x="30" y="123">干音输入</text></g>
+<g class="node n-proc" data-node="a2"><path class="frame" d="M185 34H311L320 43V130H185Z"/><path class="bar-sig" d="M185 34H311V38H185Z"/><text class="t-m" x="195" y="49">01</text><rect class="win" x="195" y="54" width="115" height="32"/><g class="gl" transform="translate(195 54)"><path class="gt gd" d="M0 8H46M0 24H46"/><path class="gs" d="M1.8 13V19M5.2 10V22M8.8 8V24M12.2 8V24M15.8 8V24M19.2 8V24M22.8 8V24M26.2 8V24M29.8 8V24M33.2 10V22M36.8 12V20M40.2 13V19M43.8 14V18"/><path class="gg" d="M51 16H61M57 12L62 16L57 20"/><path class="gs" d="M68.2 13V19M71.8 10V22M75.2 7V25M78.8 5V27M82.2 4V28M85.8 3V29M89.2 4V28M92.8 5V27M96.2 7V25M99.8 10V22M103.2 12V20M106.8 13V19M110.2 14V18"/></g><text class="t-h" x="195" y="106">清理干声</text><text class="t-s" x="195" y="123">可选分离、修复</text></g>
+<g class="node n-proc" data-node="a3"><path class="frame" d="M350 34H476L485 43V130H350Z"/><path class="bar-sig" d="M350 34H476V38H350Z"/><text class="t-m" x="360" y="49">02</text><rect class="win" x="360" y="54" width="115" height="32"/><g class="gl" transform="translate(360 54)"><path class="gr" d="M6 6V10M9.5 5V11M13 5V11M16.5 6V10M20 5V11M23.5 6V10M27 7V9M46 6V10M49.5 5V11M53 5V11M56.5 5V11M60 6V10M63.5 7V9M88 6V10M91.5 5V11M95 5V11M98.5 6V10M102 5V11M105.5 6V10M109 7V9"/><path class="gg" d="M14 23V27M17.5 22V28M21 22V28M24.5 23V27M28 22V28M31.5 23V27M35 24V26M40 23V27M44.2 22V28M48.4 22V28M52.6 22V28M56.8 23V27M61 24V26M65.2 24V26M88 23V27M91.5 22V28M95 22V28M98.5 23V27M102 22V28M105.5 23V27M109 24V26"/><path class="gt" d="M6 12L14 21M46 12L40 21M88 12V21"/></g><text class="t-h" x="360" y="106">校正节奏</text><text class="t-s" x="360" y="123">保序变时</text></g>
+<g class="node n-proc" data-node="a4"><path class="frame" d="M515 34H641L650 43V130H515Z"/><path class="bar-sig" d="M515 34H641V38H515Z"/><text class="t-m" x="525" y="49">03</text><rect class="win" x="525" y="54" width="115" height="32"/><g class="gl" transform="translate(525 54)"><path class="gt gd" d="M4 9H38M42 15H72M76 8H111"/><path class="gs" d="M4 17L5.5 18.4L7 17.6L8.4 15.9L9.9 16L11.4 17.7L12.9 18.3L14.3 16.8L15.8 15.6L17.3 16.6L18.8 18.2L20.3 17.9L21.7 16.1L23.2 15.8L24.7 17.4L26.2 18.4L27.7 17.2L29.1 15.7L30.6 16.3L32.1 18L33.6 18.1L35 16.4L36.5 15.6L38 17M42 23L43.5 24.4L45 23L46.5 21.6L48 23L49.5 24.4L51 23L52.5 21.6L54 23L55.5 24.4L57 23L58.5 21.6L60 23L61.5 24.4L63 23L64.5 21.6L66 23L67.5 24.4L69 23L70.5 21.6L72 23M76 16L77.5 17.4L79 15.8L80.6 14.6L82.1 16.4L83.6 17.3L85.1 15.4L86.7 14.8L88.2 16.7L89.7 17.1L91.2 15.1L92.7 15L94.3 17L95.8 16.9L97.3 14.9L98.8 15.3L100.3 17.2L101.9 16.6L103.4 14.7L104.9 15.6L106.4 17.4L108 16.2L109.5 14.6L111 16"/><path class="gg" d="M4 10.2L5.5 11.6L7 10.8L8.4 9.1L9.9 9.2L11.4 10.9L12.9 11.5L14.3 10L15.8 8.8L17.3 9.8L18.8 11.4L20.3 11.1L21.7 9.3L23.2 9L24.7 10.6L26.2 11.6L27.7 10.4L29.1 8.9L30.6 9.5L32.1 11.2L33.6 11.3L35 9.6L36.5 8.8L38 10.2M42 16.2L43.5 17.6L45 16.2L46.5 14.8L48 16.2L49.5 17.6L51 16.2L52.5 14.8L54 16.2L55.5 17.6L57 16.2L58.5 14.8L60 16.2L61.5 17.6L63 16.2L64.5 14.8L66 16.2L67.5 17.6L69 16.2L70.5 14.8L72 16.2M76 9.2L77.5 10.6L79 9L80.6 7.8L82.1 9.6L83.6 10.5L85.1 8.6L86.7 8L88.2 9.9L89.7 10.3L91.2 8.3L92.7 8.2L94.3 10.2L95.8 10.1L97.3 8.1L98.8 8.5L100.3 10.4L101.9 9.8L103.4 7.9L104.9 8.8L106.4 10.6L108 9.4L109.5 7.8L111 9.2"/></g><text class="t-h" x="525" y="106">修正音高</text><text class="t-s" x="525" y="123">波形移调</text></g>
+<g class="node n-proc" data-node="a5"><path class="frame" d="M680 34H806L815 43V130H680Z"/><path class="bar-sig" d="M680 34H806V38H680Z"/><text class="t-m" x="690" y="49">04</text><rect class="win" x="690" y="54" width="115" height="32"/><g class="gl" transform="translate(690 54)"><path class="gg" d="M4 9H38L45 16"/><path class="gs" d="M4 23H38L45 16"/><path class="gg" d="M45 16H52"/><circle class="gc" cx="60" cy="16" r="8"/><path class="gs" d="M56 16H64M60 12V20"/><path class="gg" d="M68 16H111"/></g><text class="t-h" x="690" y="106">人声＋伴奏</text><text class="t-s" x="690" y="123">后期与配比</text></g>
+<g class="node n-proc" data-node="a6"><path class="frame" d="M845 34H971L980 43V130H845Z"/><path class="bar-sig" d="M845 34H971V38H845Z"/><text class="t-m" x="855" y="49">04</text><rect class="win" x="855" y="54" width="115" height="32"/><g class="gl" transform="translate(855 54)"><path class="gb" d="M5.2 7V8M5.2 24V25M8.8 4V8M8.8 24V28M12.2 1V8M12.2 24V31M15.8 2V8M15.8 24V30M19.2 5V8M19.2 24V27M29.8 7V8M29.8 24V25M33.2 3V8M33.2 24V29M36.8 1V8M36.8 24V31M40.2 2V8M40.2 24V30M43.8 4V8M43.8 24V28M47.2 6V8M47.2 24V26M61.2 4V8M61.2 24V28M64.8 1V8M64.8 24V31M68.2 2V8M68.2 24V30M71.8 5V8M71.8 24V27M78.8 6V8M78.8 24V26M82.2 2V8M82.2 24V30M85.8 1V8M85.8 24V31M89.2 3V8M89.2 24V29M92.8 5V8M92.8 24V27M103.2 7V8M103.2 24V25M106.8 3V8M106.8 24V29M110.2 2V8M110.2 24V30M113.8 7V8M113.8 24V25"/><path class="gt gd" d="M0 8H115M0 24H115"/><path class="gs" d="M1.8 10V22M5.2 8V24M8.8 8V24M12.2 8V24M15.8 8V24M19.2 8V24M22.8 8V24M26.2 11V21M29.8 8V24M33.2 8V24M36.8 8V24M40.2 8V24M43.8 8V24M47.2 8V24M50.8 9V23M54.2 12V20M57.8 8V24M61.2 8V24M64.8 8V24M68.2 8V24M71.8 8V24M75.2 9V23M78.8 8V24M82.2 8V24M85.8 8V24M89.2 8V24M92.8 8V24M96.2 8V24M99.8 11V21M103.2 8V24M106.8 8V24M110.2 8V24M113.8 8V24"/></g><text class="t-h" x="855" y="106">C+ 母带</text><text class="t-s" x="855" y="123">响度与真峰值</text></g>
+<g class="node n-in" data-node="b1"><path class="frame" d="M20 266H146L155 275V362H20Z"/><text class="t-m" x="30" y="281">IN</text><rect class="win" x="30" y="286" width="115" height="32"/><g class="gl" transform="translate(30 286)"><path class="gb" d="M1.8 7V25M5.2 4V28M8.8 6V26M12.2 3V29M15.8 5V27M19.2 7V25M22.8 3V29M26.2 2V30M29.8 5V27M33.2 6V26M36.8 3V29M40.2 2V30M43.8 4V28M47.2 7V25M50.8 5V27M54.2 3V29M57.8 2V30M61.2 6V26M64.8 4V28M68.2 3V29M71.8 5V27M75.2 2V30M78.8 3V29M82.2 6V26M85.8 4V28M89.2 2V30M92.8 3V29M96.2 5V27M99.8 6V26M103.2 3V29M106.8 2V30M110.2 4V28M113.8 5V27"/><path class="gs" d="M1.8 12V20M5.2 9V23M8.8 11V21M12.2 7V25M15.8 9V23M19.2 12V20M22.8 6V26M26.2 5V27M29.8 10V22M33.2 11V21M36.8 7V25M40.2 5V27M43.8 8V24M47.2 12V20M50.8 10V22M54.2 6V26M57.8 5V27M61.2 11V21M64.8 8V24M68.2 6V26M71.8 10V22M75.2 5V27M78.8 6V26M82.2 11V21M85.8 8V24M89.2 5V27M92.8 6V26M96.2 10V22M99.8 11V21M103.2 6V26M106.8 5V27M110.2 8V24M113.8 10V22"/></g><text class="t-h" x="30" y="338">带原唱的原曲</text><text class="t-s" x="30" y="355">参考输入</text></g>
+<g class="node n-proc" data-node="b2"><path class="frame" d="M185 266H311L320 275V362H185Z"/><path class="bar-ink" d="M185 266H311V270H185Z"/><text class="t-m" x="195" y="281">01</text><rect class="win" x="195" y="286" width="115" height="32"/><g class="gl" transform="translate(195 286)"><path class="gs" d="M1.8 13V19M5.2 10V22M8.8 7V25M12.2 9V23M15.8 12V20M19.2 14V18"/><path class="gs" d="M24 16H32L42 8H50M32 16L42 24H50"/><path class="gr" d="M56 7V9M59.5 6V10M63 5V11M66.5 5V11M70 6V10M73.5 7V9M84 7V9M87.5 6V10M91 5V11M94.5 5V11M98 6V10M101.5 7V9M108.5 7V9M112 6V10"/><path class="gs" d="M56 21V27M59.5 22V26M63 21V27M66.5 21V27M70 22V26M73.5 21V27M77 21V27M80.5 22V26M84 21V27M87.5 21V27M91 21V27M94.5 22V26M98 21V27M101.5 21V27M105 22V26M108.5 21V27M112 21V27"/></g><text class="t-h" x="195" y="338">原曲分离</text><text class="t-s" x="195" y="355">可复用分轨</text></g>
+<g class="node n-ref" data-node="b3"><path class="frame" d="M350 266H476L485 275V362H350Z"/><text class="t-m" x="360" y="281">01</text><rect class="win" x="360" y="286" width="115" height="32"/><g class="gl" transform="translate(360 286)"><path class="gs" d="M1.8 15V17M5.2 14V18M8.8 13V19M12.2 11V21M15.8 9V23M19.2 8V24M22.8 9V23M26.2 10V22M29.8 12V20M33.2 14V18M36.8 15V17M40.2 14V18M43.8 12V20M47.2 9V23M50.8 6V26M54.2 4V28M57.8 3V29M61.2 5V27M64.8 7V25M68.2 9V23M71.8 11V21M75.2 13V19M78.8 15V17M82.2 14V18M85.8 12V20M89.2 10V22M92.8 7V25M96.2 5V27M99.8 6V26M103.2 9V23M106.8 12V20M110.2 14V18M113.8 15V17"/></g><text class="t-h" x="360" y="338">原唱音频</text><text class="t-s" x="360" y="355">独立参考轨</text></g>
+<g class="node n-ref" data-node="b4"><path class="frame" d="M515 266H641L650 275V362H515Z"/><text class="t-m" x="525" y="281">02·03</text><rect class="win" x="525" y="286" width="115" height="32"/><g class="gl" transform="translate(525 286)"><path class="gr" d="M4 20L5.5 20.9L7.1 20.8L8.6 19.8L10.1 19L11.6 19.3L13.2 20.4L14.7 21L16.2 20.5L17.8 19.5L19.3 19L20.8 19.6L22.4 20.7L23.9 21L25.4 20.2L26.9 19.2L28.5 19.1L30 20M34 14L35.5 14.9L37.1 14.8L38.6 13.8L40.1 13L41.6 13.3L43.2 14.4L44.7 15L46.2 14.5L47.8 13.5L49.3 13L50.8 13.6L52.4 14.7L53.9 15L55.4 14.2L56.9 13.2L58.5 13.1L60 14M64 18L65.5 19L66.9 18.5L68.4 17.3L69.9 17.2L71.4 18.3L72.8 19L74.3 18.2L75.8 17.1L77.3 17.4L78.7 18.6L80.2 18.9L81.7 17.8L83.2 17L84.6 17.7L86.1 18.8L87.6 18.7L89.1 17.5L90.5 17L92 18M96 10L97.5 11L99 10.6L100.5 9.4L102 9L103.5 10L105 11L106.5 10.6L108 9.4L109.5 9L111 10"/><path class="gk" d="M4 3V9M34 3V9M64 3V9M96 3V9"/><circle class="gc" cx="4" cy="20" r="2"/><circle class="gc" cx="34" cy="14" r="2"/><circle class="gc" cx="64" cy="18" r="2"/><circle class="gc" cx="96" cy="10" r="2"/></g><text class="t-h" x="525" y="338">参考分析</text><text class="t-s" x="525" y="355">基频与字句对应</text></g>
+<g class="node n-out" data-node="b6"><path class="frame" d="M845 266H971L980 275V362H845Z"/><text class="t-m" x="855" y="281">05</text><rect class="win" x="855" y="286" width="115" height="32"/><g class="gl" transform="translate(855 286)"><path class="gs" d="M1.8 7V25M5.2 4V28M8.8 6V26M12.2 3V29M15.8 5V27M19.2 7V25M22.8 3V29M26.2 2V30M29.8 5V27M33.2 6V26M36.8 3V29M40.2 2V30M43.8 4V28M47.2 7V25M50.8 5V27M54.2 3V29M57.8 2V30M61.2 6V26M64.8 4V28M68.2 3V29M71.8 5V27M75.2 2V30M78.8 3V29M82.2 6V26M85.8 4V28M89.2 2V30M92.8 3V29M96.2 5V27M99.8 6V26M103.2 3V29M106.8 2V30"/><path class="gs" d="M111.5 3V29"/></g><text class="t-h" x="855" y="338">整曲成品</text><text class="t-s" x="855" y="355">WAV 与报告</text></g>
+<circle class="dot-sig" cx="155" cy="70" r="2.8"/>
+<circle class="dot-sig" cx="320" cy="70" r="2.8"/>
+<circle class="dot-sig" cx="485" cy="70" r="2.8"/>
+<circle class="dot-sig" cx="650" cy="70" r="2.8"/>
+<circle class="dot-sig" cx="815" cy="70" r="2.8"/>
+<circle class="dot-sig" cx="912.5" cy="130" r="2.8"/>
+<circle class="dot-ink" cx="155" cy="302" r="2.8"/>
+<circle class="dot-ink" cx="320" cy="302" r="2.8"/>
+<circle class="dot-ink" cx="485" cy="302" r="2.8"/>
+<circle class="dot-ink" cx="252.5" cy="362" r="2.8"/>
+<circle class="dot" cx="582.5" cy="266" r="2.8"/>
+<circle class="dot" cx="582.5" cy="196" r="3.4"/>
+<text class="t-s" x="270.5" y="381">立体声伴奏</text>
+<text class="t-s" x="427.5" y="190">字句对应</text>
+<text class="t-s" x="592.5" y="170">基频参考</text>
+</svg>
 </div>
-<p class="note">以下耗时是旧版以 3 分 57 秒的《青花瓷》在本机实测的记录；加入字句识别后处理时间会变化。电脑配置不同，速度也会有差别。</p>
+    <dl class="io">
+      <div><dt>入 · IN</dt><dd>演唱录音（干音）与带原唱的原曲</dd></div>
+      <div><dt>变 · Δ</dt><dd>演唱依次清理、校正节奏、修正音高，与伴奏混合后做母带；原曲只分离，并提供参考和伴奏</dd></div>
+      <div><dt>出 · OUT</dt><dd>整曲成品 WAV 与处理报告</dd></div>
+    </dl>
+  </div>
+  <figcaption>信号总览。原唱提供参考，伴奏进入混音。修音前和实时草稿的试听分支见第 05 节。</figcaption>
+</figure>
 
-<h2><span class="idx">02</span>每一步在做什么</h2>
-<p>一共 8 步，按顺序自动完成。右侧是第一次处理时每一步的耗时；鼠标移到某一步上，可以看到再处理时的耗时。</p>
-<ol class="steps">
-  <li class="step" tabindex="0"><span class="n">1</span><div><h3>读取音频</h3><p>把你选的两个文件打开，转换成程序能处理的统一格式。</p></div>
-    <div class="time"><div class="sec">1.1 秒</div><div class="track"><div class="bar" style="width:3.7%"></div></div><div class="tip">再处理时 0.3 秒</div></div></li>
-  <li class="step" tabindex="0"><span class="n">2</span><div><h3>把原曲拆成人声和伴奏</h3><p>用 AI 把原曲里的原唱和伴奏分开。原唱用来当“标准答案”，伴奏留着最后配给你的声音。</p></div>
-    <div class="time"><div class="sec">9.4 秒</div><div class="track"><div class="bar" style="width:31.3%"></div></div><div class="tip">再处理时 1.5 秒（直接读取上次拆好的结果）</div></div></li>
-  <li class="step" tabindex="0"><span class="n">3</span><div><h3>听出两边的音高</h3><p>逐个瞬间判断你和原唱各自唱的是什么音，每秒判断 100 次。</p></div>
-    <div class="time"><div class="sec">1.7 秒</div><div class="track"><div class="bar" style="width:5.7%"></div></div><div class="tip">再处理时 1.7 秒</div></div></li>
-  <li class="step" tabindex="0"><span class="n">4</span><div><h3>保守对齐节奏</h3><p>始终保留你唱词的原始顺序。只有字句、声学和时间位置共同支持时，才小幅调整；不确定的位置保留原位置和速度，不切断连续人声。局部调整最多 150 毫秒，默认伸缩不超过 10%；不能保证每个字都贴齐。</p></div>
-    <div class="time"><div class="sec">29.6 秒</div><div class="track"><div class="bar" style="width:98.7%"></div></div><div class="tip">再处理时 26.9 秒 · 最耗时的一步</div></div></li>
-  <li class="step" tabindex="0"><span class="n">5</span><div><h3>核对可参考的音高</h3><p>只在对应可靠的位置参考原唱音高；没有匹配把握的区域保持原来的唱法，避免跟错字句修音。</p></div>
-    <div class="time"><div class="sec">0.3 秒</div><div class="track"><div class="bar" style="width:1%"></div></div><div class="tip">再处理时 0.2 秒</div></div></li>
-  <li class="step" tabindex="0"><span class="n">6</span><div><h3>修正音高</h3><p>算出每个音要调高或调低多少，然后直接在你的原声上调整。只把每个音的“中心”调准，你自己的颤音、滑音会保留；也不会把你强行拉到原唱的高度——男声唱女歌依然是你自己的音区。</p></div>
-    <div class="time"><div class="sec">2.9 秒</div><div class="track"><div class="bar" style="width:9.7%"></div></div><div class="tip">再处理时 2.9 秒</div></div></li>
-  <li class="step" tabindex="0"><span class="n">7</span><div><h3>混音出成品</h3><p>给人声做常见的美化：调整音色、让音量更稳、加一点空间感；人声出现时稍微压低伴奏，让人声更清楚。最后把整首歌的音量调到合适的水平，保证不爆音。</p></div>
-    <div class="time"><div class="sec">8.4 秒</div><div class="track"><div class="bar" style="width:28%"></div></div><div class="tip">再处理时 8.4 秒</div></div></li>
-  <li class="step" tabindex="0"><span class="n">8</span><div><h3>准备对比试听</h3><p>另外做一版“修音前”（你的原声配同一伴奏），并把两版音量调到一致，方便你在同一位置来回切换比较。</p></div>
-    <div class="time"><div class="sec">7.6 秒</div><div class="track"><div class="bar" style="width:25.3%"></div></div><div class="tip">再处理时 7.6 秒</div></div></li>
-</ol>
-<div class="scale" aria-hidden="true"><span></span><span></span><div class="ticks"><span style="left:0">0</span><span style="left:33.3%">10 秒</span><span style="left:66.7%">20 秒</span><span style="left:100%">30 秒</span></div></div>
-
-<h2><span class="idx">03</span>为什么听起来更自然</h2>
-<div class="points">
-  <div class="point"><h3>在你的原声上直接调</h3><p>不把你的声音交给 AI 重新“合成”一遍，而是在原本的录音上微调音高。呼吸声、咬字和音色都还是你自己的，电子味明显更少。</p></div>
-  <div class="point"><h3>只修准，不抹掉个性</h3><p>只把每个音调到准的位置，颤音、滑音这些个人特点基本保留，也不会把原唱的小抖动搬到你身上。</p></div>
-  <div class="point"><h3>保留你的音区</h3><p>男生唱女生的歌、或者降了八度唱，都按你自己的音区来修，不会把你拉到原唱的高度。</p></div>
-  <div class="point"><h3>保守对齐节奏</h3><p>根据可靠的字句和声学线索小幅调整；不确定的位置保留原位置和速度，原声顺序不可变。</p></div>
+<section class="chapter" id="inputs" aria-labelledby="inputs-heading">
+  <div class="chapter-head"><span class="number" aria-hidden="true">01</span><h2 id="inputs-heading">先把演唱、原唱和伴奏分开</h2></div>
+  <figure class="fig">
+    <div class="plate">
+      <div class="plate-head"><span class="fig-id">FIG.01</span><p class="plate-title">演唱预处理与原曲分轨</p><span class="plate-flag">示意 · 非实测</span></div>
+      <ul class="key" aria-label="图例">
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-sig" d="M0 6H44"/></svg>演唱信号</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-aud" d="M0 6H44"/></svg>原曲音频</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln-cache" d="M0 6H44"/></svg>缓存复用</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><g class="gl"><path class="gs" d="M3 1V11M9 3V9M15 0V12M21 4V8M27 2V10M33 1V11M39 3V9"/></g></svg>原声</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="gg" d="M3 1V11M9 3V9M15 0V12M21 4V8M27 2V10M33 1V11M39 3V9"/></svg>处理中的演唱</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="gb" d="M3 3V9M9 4V8M15 2V10M21 4V8M27 3V9M33 4V8M39 2V10"/></svg>伴奏、底噪</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="gt gd" d="M0 1H44M0 11H44"/></svg>削波电平</li>
+      </ul>
+      <p class="scroll-hint">图板可横向滚动，继续查看右侧内容。</p>
+      <div class="canvas" tabindex="0" role="region" aria-label="输入与分离图，可横向滚动"><svg viewBox="0 0 1000 416" role="img" aria-labelledby="fig01-t fig01-d">
+<title id="fig01-t">演唱预处理与原曲分轨</title>
+<desc id="fig01-d">含伴奏的演唱录音先取出人声，再按设置修复削波和降噪。纯干音直接进入清理。原曲的分离结果一轨供分析、一轨供混音。</desc>
+<rect class="lane-a" y="0" width="1000" height="206"/>
+<rect class="lt" x="20" y="8" width="16" height="16"/>
+<text class="t-m t-w" x="28" y="20" text-anchor="middle">A</text>
+<text class="t-s" x="44" y="21">演唱信号</text>
+<rect class="lane-b" y="206" width="1000" height="210"/>
+<rect class="lt" x="20" y="214" width="16" height="16"/>
+<text class="t-m t-w" x="28" y="226" text-anchor="middle">B</text>
+<text class="t-s" x="44" y="227">原曲 · 参考与伴奏</text>
+<path class="rule" d="M0 206H1000"/>
+<path class="ln ln-sig" d="M158 92H178"/>
+<path class="ln ln-sig" d="M274 92H294"/>
+<path class="ln ln-sig" d="M432 92H452"/>
+<path class="ln ln-sig" d="M548 92H568"/>
+<path class="ln ln-sig" d="M706 92H726"/>
+<path class="ln ln-sig" d="M822 92H842"/>
+<path class="ln ln-sig" d="M168 92V34H476V60"/>
+<circle class="dot-sig" cx="168" cy="92" r="2.8"/>
+<text class="t-s" x="322" y="28" text-anchor="middle">「含伴奏」关闭 · 直接清理</text>
+<g class="scope gl" transform="translate(20 60)"><rect class="sf" width="138" height="64"/><path class="gt" d="M0 32.0H138"/><path class="gb" d="M3 19.6V44.4M7 16.3V47.7M11 15.9V48.1M15 18V46M19 16.6V47.4M23 20.5V43.5M27 20.5V43.5M31 19.4V44.6M35 15.6V48.4M39 17.6V46.4M43 18.5V45.5M47 16.3V47.7M51 17.4V46.6M55 18.6V45.4M59 14.6V49.4M63 15.4V48.6M67 19V45M71 16.4V47.6M75 16.8V47.2M79 14V50M83 15.2V48.8M87 18.7V45.3M91 13.2V50.8M95 20.1V43.9M99 17.7V46.3M103 14.9V49.1M107 19.8V44.2M111 17.1V46.9M115 20.7V43.3M119 15.7V48.3M123 14.9V49.1M127 16.4V47.6M131 14V50M135 18.5V45.5"/><path class="gs" d="M7 28.2V35.8M11 20V44M15 12.4V51.6M19 14.8V49.2M23 18.8V45.2M27 28.2V35.8M35 29V35M39 21.5V42.5M43 19.9V44.1M47 21.7V42.3M51 29V35M59 29V35M63 20.6V43.4M67 11.9V52.1M71 11V53M75 10.5V53.5M79 12.7V51.3M83 19.3V44.7M87 28.7V35.3M95 28.3V35.7M99 18.9V45.1M103 18.2V45.8M107 19.2V44.8M111 28.4V35.6M119 28.6V35.4M123 22.3V41.7M127 21.8V42.2M131 28V36"/><path class="tab-in" d="M0 -16H26.8V0H0Z"/><text class="t-m tab-t-in" x="6" y="-4.5">IN</text></g>
+<g class="scope gl" transform="translate(294 60)"><rect class="sf" width="138" height="64"/><path class="gt" d="M0 32.0H138"/><path class="gb" d="M3 29.1V34.9M7 29.3V34.7M11 29.3V34.7M15 29.6V34.4M19 28.8V35.2M23 28.5V35.5M27 29.6V34.4M31 29.1V34.9M35 30.5V33.5M39 29.1V34.9M43 29.2V34.8M47 28.4V35.6M51 28.8V35.2M55 30V34M59 29.8V34.2M63 29.1V34.9M67 30.6V33.4M71 29.6V34.4M75 30.2V33.8M79 30.3V33.7M83 30.5V33.5M87 28.9V35.1M91 30.3V33.7M95 30.1V33.9M99 29.7V34.3M103 28.7V35.3M107 30.4V33.6M111 29.6V34.4M115 29.4V34.6M119 28.7V35.3M123 28.8V35.2M127 28.7V35.3M131 30V34M135 29.7V34.3"/><path class="gt gd" d="M0 14H138M0 50H138"/><path class="gg" d="M7 28.2V35.8M11 20V44M15 14V50M19 14.8V49.2M23 18.8V45.2M27 28.2V35.8M35 29V35M39 21.5V42.5M43 19.9V44.1M47 21.7V42.3M51 29V35M59 29V35M63 20.6V43.4M67 14V50M71 14V50M75 14V50M79 14V50M83 19.3V44.7M87 28.7V35.3M95 28.3V35.7M99 18.9V45.1M103 18.2V45.8M107 19.2V44.8M111 28.4V35.6M119 28.6V35.4M123 22.3V41.7M127 21.8V42.2M131 28V36"/></g>
+<g class="scope gl" transform="translate(568 60)"><rect class="sf" width="138" height="64"/><path class="gt" d="M0 32.0H138"/><path class="gb" d="M3 29.1V34.9M7 29.3V34.7M11 29.3V34.7M15 29.6V34.4M19 28.8V35.2M23 28.5V35.5M27 29.6V34.4M31 29.1V34.9M35 30.5V33.5M39 29.1V34.9M43 29.2V34.8M47 28.4V35.6M51 28.8V35.2M55 30V34M59 29.8V34.2M63 29.1V34.9M67 30.6V33.4M71 29.6V34.4M75 30.2V33.8M79 30.3V33.7M83 30.5V33.5M87 28.9V35.1M91 30.3V33.7M95 30.1V33.9M99 29.7V34.3M103 28.7V35.3M107 30.4V33.6M111 29.6V34.4M115 29.4V34.6M119 28.7V35.3M123 28.8V35.2M127 28.7V35.3M131 30V34M135 29.7V34.3"/><path class="gt gd" d="M0 14H138M0 50H138"/><path class="gg" d="M7 28.2V35.8M11 20V44M15 12.4V51.6M19 14.8V49.2M23 18.8V45.2M27 28.2V35.8M35 29V35M39 21.5V42.5M43 19.9V44.1M47 21.7V42.3M51 29V35M59 29V35M63 20.6V43.4M67 11.9V52.1M71 11V53M75 10.5V53.5M79 12.7V51.3M83 19.3V44.7M87 28.7V35.3M95 28.3V35.7M99 18.9V45.1M103 18.2V45.8M107 19.2V44.8M111 28.4V35.6M119 28.6V35.4M123 22.3V41.7M127 21.8V42.2M131 28V36"/></g>
+<g class="scope gl" transform="translate(842 60)"><rect class="sf" width="138" height="64"/><path class="gt" d="M0 32.0H138"/><path class="gb" d="M3 31.3V32.7M7 31V33M11 30.9V33.1M15 31.5V32.5M19 31.5V32.5M23 31.4V32.6M27 31.4V32.6M31 31.3V32.7M35 31.2V32.8M39 31.4V32.6M43 31.6V32.4M47 31.3V32.7M51 31.3V32.7M55 31.2V32.8M59 30.9V33.1M63 31.1V32.9M67 31.2V32.8M71 31.2V32.8M75 31.1V32.9M79 31.6V32.4M83 31V33M87 31.1V32.9M91 31V33M95 31V33M99 31.3V32.7M103 31.3V32.7M107 31.5V32.5M111 31.2V32.8M115 31.6V32.4M119 31.6V32.4M123 31.5V32.5M127 31.5V32.5M131 31.4V32.6M135 31.6V32.4"/><path class="gt gd" d="M0 14H138M0 50H138"/><path class="gg" d="M7 28.2V35.8M11 20V44M15 12.4V51.6M19 14.8V49.2M23 18.8V45.2M27 28.2V35.8M35 29V35M39 21.5V42.5M43 19.9V44.1M47 21.7V42.3M51 29V35M59 29V35M63 20.6V43.4M67 11.9V52.1M71 11V53M75 10.5V53.5M79 12.7V51.3M83 19.3V44.7M87 28.7V35.3M95 28.3V35.7M99 18.9V45.1M103 18.2V45.8M107 19.2V44.8M111 28.4V35.6M119 28.6V35.4M123 22.3V41.7M127 21.8V42.2M131 28V36"/><path class="tab-out" d="M0 -16H34.2V0H0Z"/><text class="t-m tab-t-out" x="6" y="-4.5">OUT</text></g>
+<g class="node n-proc"><path class="frame" d="M178 60H265L274 69V124H178Z"/><path class="bar-sig" d="M178 60H265V64H178Z"/><text class="t-h" x="226" y="91" text-anchor="middle">提取</text><text class="t-h" x="226" y="110" text-anchor="middle">演唱人声</text></g>
+<g class="node n-proc"><path class="frame" d="M452 60H539L548 69V124H452Z"/><path class="bar-sig" d="M452 60H539V64H452Z"/><text class="t-h" x="500" y="91" text-anchor="middle">削波</text><text class="t-h" x="500" y="110" text-anchor="middle">修复</text></g>
+<g class="node n-proc"><path class="frame" d="M726 60H813L822 69V124H726Z"/><path class="bar-sig" d="M726 60H813V64H726Z"/><text class="t-h" x="774" y="91" text-anchor="middle">温和</text><text class="t-h" x="774" y="110" text-anchor="middle">降噪</text></g>
+<text class="t-h" x="20" y="146">演唱录音</text><text class="t-s" x="20" y="163">可含伴奏，也可纯干音</text>
+<text class="t-h" x="294" y="146">演唱人声</text><text class="t-s" x="294" y="163">仍有削波与底噪</text>
+<text class="t-h" x="568" y="146">削波已修复</text><text class="t-s" x="568" y="163">仍有底噪</text>
+<text class="t-h" x="842" y="146">清理后的干声</text><text class="t-s" x="842" y="163">送节奏对齐</text>
+<text class="t-h" x="226" y="146" text-anchor="middle">Kim Vocal 2</text><text class="t-s" x="226" y="163" text-anchor="middle">「含伴奏」开启时</text>
+<text class="t-h" x="500" y="146" text-anchor="middle">数字削波</text><text class="t-s" x="500" y="163" text-anchor="middle">只修明显的</text>
+<text class="t-h" x="774" y="146" text-anchor="middle">DeepFilterNet3</text><text class="t-s" x="774" y="163" text-anchor="middle">衰减 ≤ 12 dB</text>
+<path class="brk" d="M452 174V180H822V174"/>
+<text class="t-s" x="637" y="196" text-anchor="middle">「修正」开启时执行</text>
+<path class="ln ln-aud" d="M158 332H178"/>
+<path class="ln ln-aud" d="M274 314H300"/>
+<path class="ln ln-aud" d="M274 350H300"/>
+<path class="ln ln-aud" d="M420 314H442"/>
+<path class="ln ln-aud" d="M420 350H442"/>
+<path class="ln-cache" d="M226 268V290"/>
+<ellipse class="cyl" cx="226" cy="246" rx="22" ry="5.5"/><path class="cyl" d="M204 246V262A22 5.5 0 0 0 248 262V246"/><ellipse class="cyl" cx="226" cy="246" rx="22" ry="5.5"/>
+<text class="t-s" x="262" y="255">输入和模型匹配时复用，省去重复分轨</text>
+<g class="scope gl" transform="translate(20 300)"><rect class="sf sf-w" width="138" height="64"/><path class="gt" d="M0 32.0H138"/><path class="gb" d="M3 17.5V46.5M7 17.7V46.3M11 13.8V50.2M15 11.4V52.6M19 16V48M23 11.6V52.4M27 11.1V52.9M31 11.4V52.6M35 16.7V47.3M39 18V46M43 18V46M47 18.2V45.8M51 18.2V45.8M55 14.4V49.6M59 11.9V52.1M63 12.4V51.6M67 15.7V48.3M71 14.1V49.9M75 12.8V51.2M79 19.2V44.8M83 14.1V49.9M87 11.8V52.2M91 13V51M95 13.2V50.8M99 15.7V48.3M103 18.4V45.6M107 12.9V51.1M111 17V47M115 12.8V51.2M119 11.3V52.7M123 16.4V47.6M127 16.4V47.6M131 11.5V52.5M135 13.5V50.5"/><path class="gs" d="M11 29.3V34.7M15 22.6V41.4M19 17.3V46.7M23 12.4V51.6M27 15V49M31 22.6V41.4M35 28.8V35.2M47 28.6V35.4M51 21V43M55 15.3V48.7M59 10.7V53.3M63 12.6V51.4M67 16.6V47.4M71 20.2V43.8M75 28.9V35.1M87 30V34M91 24.3V39.7M95 20.4V43.6M99 15.7V48.3M103 14.6V49.4M107 17.9V46.1M111 20.9V43.1M115 25.3V38.7M119 30.1V33.9"/><path class="tab-in" d="M0 -16H26.8V0H0Z"/><text class="t-m tab-t-in" x="6" y="-4.5">IN</text></g>
+<g class="node n-proc"><path class="frame" d="M178 290H265L274 299V374H178Z"/><path class="bar-ink" d="M178 290H265V294H178Z"/><text class="t-h" x="226" y="321" text-anchor="middle">原曲</text><text class="t-h" x="226" y="340" text-anchor="middle">分离</text></g>
+<g class="scope gl" transform="translate(300 300)"><rect class="sf sf-w" width="120" height="28"/><path class="gs" d="M6.9 12.6V15.4M10.8 8.8V19.2M14.7 6V22M18.6 4.4V23.6M22.5 6.2V21.8M26.4 7.9V20.1M30.3 12.3V15.7M45.9 12.4V15.6M49.8 8.2V19.8M53.7 4.8V23.2M57.6 3.5V24.5M61.5 5.3V22.7M65.4 7.4V20.6M69.3 12V16M84.9 12.7V15.3M88.8 9.4V18.6M92.7 7.5V20.5M96.6 6.6V21.4M100.5 7.1V20.9M104.4 9.6V18.4M108.3 12.6V15.4"/></g>
+<g class="scope gl" transform="translate(300 336)"><rect class="sf sf-w" width="120" height="28"/><path class="gb" d="M3 9V19M6.9 9.9V18.1M10.8 4.3V23.7M14.7 6.8V21.2M18.6 9.1V18.9M22.5 6.7V21.3M26.4 9.8V18.2M30.3 6.8V21.2M34.2 4.1V23.9M38.1 4.8V23.2M42 5.8V22.2M45.9 8.4V19.6M49.8 7.8V20.2M53.7 9V19M57.6 5.4V22.6M61.5 6.8V21.2M65.4 5.3V22.7M69.3 8V20M73.2 8.7V19.3M77.1 5.1V22.9M81 4.1V23.9M84.9 4.9V23.1M88.8 5.2V22.8M92.7 5.1V22.9M96.6 5.6V22.4M100.5 8.6V19.4M104.4 6.9V21.1M108.3 7.9V20.1M112.2 9.8V18.2M116.1 9.8V18.2"/></g>
+<text class="t-h" x="450" y="319">原唱<tspan class="t-s" dx="10">供分析唱段、旋律和参考电平</tspan></text>
+<text class="t-h" x="450" y="355">立体声伴奏<tspan class="t-s" dx="10">留到后期混音</tspan></text>
+<text class="t-h" x="20" y="386">带原唱的原曲</text><text class="t-s" x="20" y="403">原唱和伴奏混在一起</text>
+</svg>
 </div>
+      <dl class="io">
+        <div><dt>入 · IN</dt><dd>演唱录音（可含伴奏）；带原唱的原曲</dd></div>
+        <div><dt>变 · Δ</dt><dd>含伴奏时先提取人声；按设置修复削波并降噪；原曲分成原唱与伴奏两轨</dd></div>
+        <div><dt>出 · OUT</dt><dd>清理后的干声；原唱参考轨；立体声伴奏</dd></div>
+      </dl>
+    </div>
+    <figcaption>两次分离的用途不同。上路只取你的演唱，下路同时保留原唱和伴奏。图中波形为示意。</figcaption>
+  </figure>
+  <div class="notes">
+    <p><strong>演唱入口。</strong>普通干音直接读入。勾选「含伴奏」时，Kim Vocal 2 先提取演唱人声，避免让伴奏干扰后续分析。启用「修正」时，清理链可修复明显的数字削波，并用 DeepFilterNet3 温和降噪。</p>
+    <p><strong>原曲入口。</strong>分离后的原唱用来分析唱段、旋律和参考电平，立体声伴奏留到混音。输入和模型匹配时可以复用分离缓存，省去重复分轨。</p>
+  </div>
+</section>
 
-<h2><span class="idx">04</span>可以调的设置</h2>
-<table>
-  <tr><th>设置</th><th>默认</th><th>说明</th></tr>
-  <tr><td>修音强度</td><td>75%</td><td>越高修得越准；0% 表示不修音高</td></tr>
-  <tr><td>节奏匹配</td><td>开</td><td>关掉后保持原始时间位置，不再自动猜测起点平移</td></tr>
-  <tr><td>混音</td><td>开</td><td>关掉后不做美化，只把人声和伴奏直接合在一起</td></tr>
-</table>
+<section class="chapter" id="timing" aria-labelledby="timing-heading">
+  <div class="chapter-head"><span class="number" aria-hidden="true">02</span><h2 id="timing-heading">先找准对应，再移动可信的段落</h2></div>
+  <figure class="fig">
+    <div class="plate">
+      <div class="plate-head"><span class="fig-id">FIG.02</span><p class="plate-title">用同一时间轴比较原唱、输入和对齐结果</p><span class="plate-flag">示意输入 · 项目算法实算</span></div>
+      <ul class="key" aria-label="图例">
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="lk" d="M0 6H44"/></svg>字音对应，◆ 为锚点</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="curve" d="M0 9H14L24 3H44"/></svg>移动量</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="gt gd" d="M0 6H44"/></svg>整句移动范围 60–450 ms</li>
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><rect class="band" x="1" y="1" width="26" height="14"/></svg>输入中的演唱时段</li>
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><rect fill="url(#hatch-l)" x="1" y="1" width="26" height="14" stroke="#6f7b86"/></svg>没有可靠对应</li>
+      </ul>
+      <p class="scroll-hint">图板可横向滚动，继续查看右侧内容。</p>
+      <div class="canvas" tabindex="0" role="region" aria-label="节奏对齐时间轴，可横向滚动"><svg viewBox="0 0 1000 584" role="img" aria-labelledby="fig02-t fig02-d">
+<title id="fig02-t">用同一时间轴比较原唱、输入和对齐结果</title>
+<desc id="fig02-d">示意中第一句经确认后提前，第二句移动并伸展，第三段没有可靠对应，保留位置和时长。三个时间轴保持原有唱词顺序。</desc>
+<rect class="rail" width="150" height="584"/>
+<path class="rule" d="M150 0V584"/>
+<rect class="band" x="256" y="182" width="160" height="330"/>
+<rect class="band" x="448" y="182" width="256" height="330"/>
+<rect class="band" x="776" y="182" width="200" height="330"/>
+<rect fill="url(#hatch-l)" x="776" y="84" width="200" height="58"/>
+<rect fill="url(#hatch-l)" x="776" y="182" width="200" height="330"/>
+<path class="gt gd" d="M150 311.6H980"/>
+<path class="gt gd" d="M150 340.4H980"/>
+<path class="gt gd" d="M150 218H980"/>
+<path class="gt gd" d="M150 434H980"/>
+<path class="zero" d="M150 326H980"/>
+<path class="lk" d="M240 84L264 142"/>
+<path class="lk" d="M246.4 84L270.4 142"/>
+<path class="lk" d="M276 84L300 142"/>
+<path class="lk" d="M282.4 84L306.4 142"/>
+<path class="lk" d="M312 84L336 142"/>
+<path class="lk" d="M318.4 84L342.4 142"/>
+<path class="lk" d="M348 84L372 142"/>
+<path class="lk" d="M354.4 84L378.4 142"/>
+<path class="lk" d="M472 84L456 142"/>
+<path class="lk" d="M478.4 84L462.4 142"/>
+<path class="lk" d="M514.4 84L496 142"/>
+<path class="lk" d="M520.8 84L502.4 142"/>
+<path class="lk" d="M556 84L536 142"/>
+<path class="lk" d="M562.4 84L542.4 142"/>
+<path class="lk" d="M586.4 84L568 142"/>
+<path class="lk" d="M592.8 84L574.4 142"/>
+<path class="lk" d="M619.2 84L604 142"/>
+<path class="lk" d="M625.6 84L610.4 142"/>
+<path class="lk" d="M664 84L648 142"/>
+<path class="lk" d="M670.4 84L654.4 142"/>
+<rect class="clip" x="237" y="44" width="147.6" height="40"/><path class="gr" d="M241.6 61.9V66.1M244.8 57.3V70.7M248 57.5V70.5M251.2 54.6V73.4M254.4 49.6V78.4M257.6 51V77M260.8 54.8V73.2M264 55.1V72.9M267.2 55.5V72.5M270.4 60.1V67.9M277.6 62.3V65.7M280.8 57.2V70.8M284 57.1V70.9M287.2 52.7V75.3M290.4 51.6V76.4M293.6 52.3V75.7M296.8 50.2V77.8M300 55.9V72.1M303.2 56.5V71.5M306.4 60.8V67.2M313.6 61.3V66.7M316.8 59.3V68.7M320 55.5V72.5M323.2 51.7V76.3M326.4 50V78M329.6 54.4V73.6M332.8 50.6V77.4M336 52.7V75.3M339.2 57.5V70.5M342.4 59.5V68.5M349.6 62.1V65.9M352.8 59.3V68.7M356 56.9V71.1M359.2 54.5V73.5M362.4 50.4V77.6M365.6 52.3V75.7M368.8 50V78M372 52.5V75.5M375.2 57.9V70.1M378.4 60.1V67.9"/>
+<rect class="clip" x="261" y="142" width="147.6" height="40"/><path class="gs" d="M265.6 159.8V164.2M268.8 156.5V167.5M272 153.2V170.8M275.2 153V171M278.4 148.4V175.6M281.6 148.1V175.9M284.8 149.9V174.1M288 154V170M291.2 154.8V169.2M294.4 158.3V165.7M301.6 160.1V163.9M304.8 155.1V168.9M308 151.4V172.6M311.2 153.9V170.1M314.4 148.2V175.8M317.6 149.4V174.6M320.8 151.4V172.6M324 153.4V170.6M327.2 154.2V169.8M330.4 158.1V165.9M337.6 159.6V164.4M340.8 155.9V168.1M344 155.1V168.9M347.2 150V174M350.4 147.4V176.6M353.6 147.2V176.8M356.8 150.1V173.9M360 154.6V169.4M363.2 156.6V167.4M366.4 158.7V165.3M373.6 159.4V164.6M376.8 156.9V167.1M380 154.1V169.9M383.2 149.4V174.6M386.4 151.4V172.6M389.6 149.7V174.3M392.8 151.1V172.9M396 154.5V169.5M399.2 154.5V169.5M402.4 157.3V166.7"/>
+<rect class="clip" x="237" y="464" width="147.6" height="40"/><path class="gg" d="M241.6 481.8V486.2M244.8 478.5V489.5M248 475.2V492.8M251.2 475V493M254.4 470.4V497.6M257.6 470.1V497.9M260.8 471.9V496.1M264 476V492M267.2 476.8V491.2M270.4 480.3V487.7M277.6 482.1V485.9M280.8 477.1V490.9M284 473.4V494.6M287.2 475.9V492.1M290.4 470.2V497.8M293.6 471.4V496.6M296.8 473.4V494.6M300 475.4V492.6M303.2 476.2V491.8M306.4 480.1V487.9M313.6 481.6V486.4M316.8 477.9V490.1M320 477.1V490.9M323.2 472V496M326.4 469.4V498.6M329.6 469.2V498.8M332.8 472.1V495.9M336 476.6V491.4M339.2 478.6V489.4M342.4 480.7V487.3M349.6 481.4V486.6M352.8 478.9V489.1M356 476.1V491.9M359.2 471.4V496.6M362.4 473.4V494.6M365.6 471.7V496.3M368.8 473.1V494.9M372 476.5V491.5M375.2 476.5V491.5M378.4 479.3V488.7"/>
+<rect class="clip" x="469" y="44" width="243.6" height="40"/><path class="gr" d="M473.6 62.2V65.8M476.8 59.5V68.5M480 57.5V70.5M483.2 52.1V75.9M486.4 52.3V75.7M489.6 50.9V77.1M492.8 51.8V76.2M496 53.6V74.4M499.2 53.5V74.5M502.4 56.5V71.5M505.6 59V69M516 61.7V66.3M519.2 59V69M522.4 57.5V70.5M525.6 55.9V72.1M528.8 51.5V76.5M532 54V74M535.2 51.2V76.8M538.4 52.3V75.7M541.6 56.7V71.3M544.8 55.8V72.2M548 60.6V67.4M551.2 62.8V65.2M557.6 61.2V66.8M560.8 58.6V69.4M564 53.7V74.3M567.2 51.5V76.5M570.4 54.3V73.7M573.6 51.5V76.5M576.8 56V72M580 55.4V72.6M583.2 60.2V67.8M588 61.3V66.7M591.2 59.6V68.4M594.4 56.3V71.7M597.6 52.8V75.2M600.8 51.6V76.4M604 53.9V74.1M607.2 50.6V77.4M610.4 52.7V75.3M613.6 57.6V70.4M616.8 60.7V67.3M620.8 62.1V65.9M624 59.5V68.5M627.2 56.2V71.8M630.4 54.8V73.2M633.6 53.8V74.2M636.8 55.1V72.9M640 54.2V73.8M643.2 52.6V75.4M646.4 52V76M649.6 55.1V72.9M652.8 55.9V72.1M656 59.2V68.8M659.2 61.9V66.1M665.6 62.2V65.8M668.8 60V68M672 58.5V69.5M675.2 57.2V70.8M678.4 56.1V71.9M681.6 50.6V77.4M684.8 49.9V78.1M688 50.5V77.5M691.2 54.7V73.3M694.4 52.6V75.4M697.6 56.6V71.4M700.8 55.4V72.6M704 58.6V69.4M707.2 61.3V66.7"/>
+<rect class="clip" x="453" y="142" width="243.6" height="40"/><path class="gs" d="M457.6 160.1V163.9M460.8 156.7V167.3M464 152.5V171.5M467.2 152.3V171.7M470.4 150.7V173.3M473.6 149.5V174.5M476.8 152V172M480 150.9V173.1M483.2 152V172M486.4 153.8V170.2M489.6 158.5V165.5M497.6 160.4V163.6M500.8 156.1V167.9M504 153.4V170.6M507.2 154.4V169.6M510.4 148V176M513.6 147.3V176.7M516.8 149.2V174.8M520 150.4V173.6M523.2 154.2V169.8M526.4 156.6V167.4M529.6 157.5V166.5M537.6 160V164M540.8 156.5V167.5M544 154.9V169.1M547.2 151V173M550.4 150.4V173.6M553.6 148.5V175.5M556.8 152V172M560 154.4V169.6M563.2 158.5V165.5M569.6 159.7V164.3M572.8 156.5V167.5M576 154.5V169.5M579.2 148.8V175.2M582.4 147.4V176.6M585.6 148V176M588.8 149.6V174.4M592 153.3V170.7M595.2 155.8V168.2M598.4 158.4V165.6M605.6 160.6V163.4M608.8 156.7V167.3M612 155.1V168.9M615.2 151.2V172.8M618.4 151.9V172.1M621.6 147.6V176.4M624.8 147.9V176.1M628 153.2V170.8M631.2 152.8V171.2M634.4 150.9V173.1M637.6 154.9V169.1M640.8 156.1V167.9M644 160.3V163.7M649.6 160.7V163.3M652.8 157.4V166.6M656 154.4V169.6M659.2 154.3V169.7M662.4 153.9V170.1M665.6 151.6V172.4M668.8 147.3V176.7M672 148.5V175.5M675.2 152.7V171.3M678.4 152.8V171.2M681.6 154.7V169.3M684.8 156.4V167.6M688 156.3V167.7M691.2 160V164"/>
+<rect class="clip" x="469.4" y="464" width="244.1" height="40"/><path class="gg" d="M473.9 482.1V485.9M476.9 478.7V489.3M480.1 474.5V493.5M483.5 474.3V493.7M487 472.7V495.3M490.4 471.5V496.5M493.8 474V494M497.3 472.9V495.1M500.7 474V494M504.1 475.8V492.2M507.5 480.5V487.5M516 482.4V485.6M519.2 478.1V489.9M522.5 475.4V492.6M525.8 476.4V491.6M529.2 470V498M532.5 469.3V498.7M535.9 471.2V496.8M539.2 472.4V495.6M542.6 476.2V491.8M545.9 478.6V489.4M549.3 479.5V488.5M557.6 482V486M560.8 478.5V489.5M563.9 476.9V491.1M566.9 473V495M569.9 472.4V495.6M572.9 470.5V497.5M575.9 474V494M578.9 476.4V491.6M581.9 480.5V487.5M588 481.7V486.3M591.1 478.5V489.5M594.1 476.5V491.5M597 470.8V497.2M599.9 469.4V498.6M602.8 470V498M605.6 471.6V496.4M608.5 475.3V492.7M611.4 477.8V490.2M614.3 480.4V487.6M620.9 482.6V485.4M624 478.7V489.3M627.2 477.1V490.9M630.5 473.2V494.8M633.8 473.9V494.1M637 469.6V498.4M640.3 469.9V498.1M643.6 475.2V492.8M646.8 474.8V493.2M650.1 472.9V495.1M653.4 476.9V491.1M656.6 478.1V489.9M659.9 482.3V485.7M665.6 482.7V485.3M668.8 479.4V488.6M672 476.4V491.6M675.3 476.3V491.7M678.6 475.9V492.1M681.9 473.6V494.4M685.1 469.3V498.7M688.4 470.5V497.5M691.7 474.7V493.3M695 474.8V493.2M698.3 476.7V491.3M701.5 478.4V489.6M704.8 478.3V489.7M708.1 482V486"/>
+<rect class="clip" x="781" y="44" width="187.6" height="40"/><path class="gr" d="M785.6 62.2V65.8M788.8 60.7V67.3M792 58.1V69.9M795.2 56.5V71.5M798.4 52.6V75.4M801.6 51.7V76.3M804.8 49.8V78.2M808 54.5V73.5M811.2 52.9V75.1M814.4 55.9V72.1M817.6 56.2V71.8M820.8 56.7V71.3M824 60.2V67.8M827.2 62V66M833.6 62.1V65.9M836.8 59.2V68.8M840 57.8V70.2M843.2 54.3V73.7M846.4 51.6V76.4M849.6 55.2V72.8M852.8 50.2V77.8M856 51.2V76.8M859.2 54.1V73.9M862.4 56.3V71.7M865.6 55.1V72.9M868.8 59.7V68.3M872 62.6V65.4M877.6 62.6V65.4M880.8 58.5V69.5M884 56.4V71.6M887.2 53.3V74.7M890.4 52V76M893.6 52.1V75.9M896.8 49.2V78.8M900 53V75M903.2 53V75M906.4 53.2V74.8M909.6 56.4V71.6M912.8 58.4V69.6M916 62.1V65.9M921.6 62.2V65.8M924.8 60.6V67.4M928 58.2V69.8M931.2 56.2V71.8M934.4 55.9V72.1M937.6 54.2V73.8M940.8 54.5V73.5M944 53.4V74.6M947.2 51.7V76.3M950.4 54.2V73.8M953.6 55.5V72.5M956.8 57.8V70.2M960 59.6V68.4M963.2 61.1V66.9"/>
+<rect class="clip" x="781" y="142" width="187.6" height="40"/><path class="gs" d="M785.6 160.4V163.6M788.8 157.3V166.7M792 154.7V169.3M795.2 154.9V169.1M798.4 154.3V169.7M801.6 151.4V172.6M804.8 151.4V172.6M808 148.2V175.8M811.2 149.4V174.6M814.4 150.9V173.1M817.6 152.6V171.4M820.8 154.2V169.8M824 157.9V166.1M827.2 159.7V164.3M833.6 160.5V163.5M836.8 156.3V167.7M840 156.4V167.6M843.2 151.3V172.7M846.4 153.5V170.5M849.6 149.2V174.8M852.8 151V173M856 150.9V173.1M859.2 149.4V174.6M862.4 155V169M865.6 156.4V167.6M868.8 156.3V167.7M872 160.2V163.8M877.6 160.6V163.4M880.8 156.1V167.9M884 153.2V170.8M887.2 154.5V169.5M890.4 151.7V172.3M893.6 152.4V171.6M896.8 151.1V172.9M900 149.6V174.4M903.2 153.1V170.9M906.4 151.8V172.2M909.6 156.4V167.6M912.8 158.1V165.9M916 159.9V164.1M921.6 160.4V163.6M924.8 157.8V166.2M928 155V169M931.2 153.4V170.6M934.4 152.4V171.6M937.6 153.3V170.7M940.8 148.8V175.2M944 147.2V176.8M947.2 147.8V176.2M950.4 150.6V173.4M953.6 153.6V170.4M956.8 155.3V168.7M960 156.5V167.5M963.2 159.4V164.6"/>
+<rect class="clip" x="781" y="464" width="187.6" height="40"/><path class="gg" d="M785.6 482.4V485.6M788.8 479.3V488.7M792 476.7V491.3M795.2 476.9V491.1M798.4 476.3V491.7M801.6 473.4V494.6M804.8 473.4V494.6M808 470.2V497.8M811.2 471.4V496.6M814.4 472.9V495.1M817.6 474.6V493.4M820.8 476.2V491.8M824 479.9V488.1M827.2 481.7V486.3M833.6 482.5V485.5M836.8 478.3V489.7M840 478.4V489.6M843.2 473.3V494.7M846.4 475.5V492.5M849.6 471.2V496.8M852.8 473V495M856 472.9V495.1M859.2 471.4V496.6M862.4 477V491M865.6 478.4V489.6M868.8 478.3V489.7M872 482.2V485.8M877.6 482.6V485.4M880.8 478.1V489.9M884 475.2V492.8M887.2 476.5V491.5M890.4 473.7V494.3M893.6 474.4V493.6M896.8 473.1V494.9M900 471.6V496.4M903.2 475.1V492.9M906.4 473.8V494.2M909.6 478.4V489.6M912.8 480.1V487.9M916 481.9V486.1M921.6 482.4V485.6M924.8 479.8V488.2M928 477V491M931.2 475.4V492.6M934.4 474.4V493.6M937.6 475.3V492.7M940.8 470.8V497.2M944 469.2V498.8M947.2 469.8V498.2M950.4 472.6V495.4M953.6 475.6V492.4M956.8 477.3V490.7M960 478.5V489.5M963.2 481.4V486.6"/>
+<path class="anc" d="M237 84L240 81L243 84L240 87Z"/><path class="anc" d="M261 142L264 139L267 142L264 145Z"/>
+<path class="anc" d="M243.4 84L246.4 81L249.4 84L246.4 87Z"/><path class="anc" d="M267.4 142L270.4 139L273.4 142L270.4 145Z"/>
+<path class="anc" d="M273 84L276 81L279 84L276 87Z"/><path class="anc" d="M297 142L300 139L303 142L300 145Z"/>
+<path class="anc" d="M279.4 84L282.4 81L285.4 84L282.4 87Z"/><path class="anc" d="M303.4 142L306.4 139L309.4 142L306.4 145Z"/>
+<path class="anc" d="M309 84L312 81L315 84L312 87Z"/><path class="anc" d="M333 142L336 139L339 142L336 145Z"/>
+<path class="anc" d="M315.4 84L318.4 81L321.4 84L318.4 87Z"/><path class="anc" d="M339.4 142L342.4 139L345.4 142L342.4 145Z"/>
+<path class="anc" d="M345 84L348 81L351 84L348 87Z"/><path class="anc" d="M369 142L372 139L375 142L372 145Z"/>
+<path class="anc" d="M351.4 84L354.4 81L357.4 84L354.4 87Z"/><path class="anc" d="M375.4 142L378.4 139L381.4 142L378.4 145Z"/>
+<path class="anc" d="M469 84L472 81L475 84L472 87Z"/><path class="anc" d="M453 142L456 139L459 142L456 145Z"/>
+<path class="anc" d="M475.4 84L478.4 81L481.4 84L478.4 87Z"/><path class="anc" d="M459.4 142L462.4 139L465.4 142L462.4 145Z"/>
+<path class="anc" d="M511.4 84L514.4 81L517.4 84L514.4 87Z"/><path class="anc" d="M493 142L496 139L499 142L496 145Z"/>
+<path class="anc" d="M517.8 84L520.8 81L523.8 84L520.8 87Z"/><path class="anc" d="M499.4 142L502.4 139L505.4 142L502.4 145Z"/>
+<path class="anc" d="M553 84L556 81L559 84L556 87Z"/><path class="anc" d="M533 142L536 139L539 142L536 145Z"/>
+<path class="anc" d="M559.4 84L562.4 81L565.4 84L562.4 87Z"/><path class="anc" d="M539.4 142L542.4 139L545.4 142L542.4 145Z"/>
+<path class="anc" d="M583.4 84L586.4 81L589.4 84L586.4 87Z"/><path class="anc" d="M565 142L568 139L571 142L568 145Z"/>
+<path class="anc" d="M589.8 84L592.8 81L595.8 84L592.8 87Z"/><path class="anc" d="M571.4 142L574.4 139L577.4 142L574.4 145Z"/>
+<path class="anc" d="M616.2 84L619.2 81L622.2 84L619.2 87Z"/><path class="anc" d="M601 142L604 139L607 142L604 145Z"/>
+<path class="anc" d="M622.6 84L625.6 81L628.6 84L625.6 87Z"/><path class="anc" d="M607.4 142L610.4 139L613.4 142L610.4 145Z"/>
+<path class="anc" d="M661 84L664 81L667 84L664 87Z"/><path class="anc" d="M645 142L648 139L651 142L648 145Z"/>
+<path class="anc" d="M667.4 84L670.4 81L673.4 84L670.4 87Z"/><path class="anc" d="M651.4 142L654.4 139L657.4 142L654.4 145Z"/>
+<path class="curve" d="M160 326L256 398L264 398L270.4 398L300 398L306.4 398L336 398L342.4 398L372 398L378.4 398L416 398L448 274.4L456 276.8L462.4 278L496 270.8L502.4 270.8L536 266L542.4 266L568 270.8L574.4 271.2L604 280L610.4 280.4L648 278L654.4 278L704 274.4L776 326L976 326"/>
+<circle class="dot-sig" cx="264" cy="398" r="2.6"/>
+<circle class="dot-sig" cx="270.4" cy="398" r="2.6"/>
+<circle class="dot-sig" cx="300" cy="398" r="2.6"/>
+<circle class="dot-sig" cx="306.4" cy="398" r="2.6"/>
+<circle class="dot-sig" cx="336" cy="398" r="2.6"/>
+<circle class="dot-sig" cx="342.4" cy="398" r="2.6"/>
+<circle class="dot-sig" cx="372" cy="398" r="2.6"/>
+<circle class="dot-sig" cx="378.4" cy="398" r="2.6"/>
+<circle class="dot-sig" cx="456" cy="276.8" r="2.6"/>
+<circle class="dot-sig" cx="462.4" cy="278" r="2.6"/>
+<circle class="dot-sig" cx="496" cy="270.8" r="2.6"/>
+<circle class="dot-sig" cx="502.4" cy="270.8" r="2.6"/>
+<circle class="dot-sig" cx="536" cy="266" r="2.6"/>
+<circle class="dot-sig" cx="542.4" cy="266" r="2.6"/>
+<circle class="dot-sig" cx="568" cy="270.8" r="2.6"/>
+<circle class="dot-sig" cx="574.4" cy="271.2" r="2.6"/>
+<circle class="dot-sig" cx="604" cy="280" r="2.6"/>
+<circle class="dot-sig" cx="610.4" cy="280.4" r="2.6"/>
+<circle class="dot-sig" cx="648" cy="278" r="2.6"/>
+<circle class="dot-sig" cx="654.4" cy="278" r="2.6"/>
+<text class="t-s" x="336" y="28" text-anchor="middle">可信对应</text>
+<text class="t-s" x="576" y="28" text-anchor="middle">可信对应</text>
+<text class="t-s" x="876" y="28" text-anchor="middle">没有可靠对应</text>
+<text class="t-s" x="336" y="389" text-anchor="middle">整句进点</text>
+<text class="t-s" x="576" y="252.8" text-anchor="middle">句内变时</text>
+<path class="ldr" d="M432 336.2L478 352.2"/>
+<text class="t-s halo" x="482" y="357.2">停顿吸收位移</text>
+<text class="t-h" x="336" y="530" text-anchor="middle">整句提前</text>
+<text class="t-h" x="576" y="530" text-anchor="middle">移动并局部伸展</text>
+<text class="t-h" x="876" y="530" text-anchor="middle">原位保留</text>
+<rect class="card" x="790" y="248" width="190" height="64"/>
+<text class="t-s" x="798" y="266">句内变时上限 ±10%</text>
+<path class="brk" d="M804 296H884V272Z"/>
+<text class="t-s" x="844" y="310" text-anchor="middle">1 s</text>
+<text class="t-s" x="890" y="288">100 ms</text>
+<text class="t-h" x="20" y="69">原唱</text>
+<text class="t-h" x="20" y="167">演唱输入</text>
+<text class="t-h" x="20" y="489">对齐后</text>
+<text class="t-h" x="20" y="330">移动量</text>
+<text class="t-s" x="20" y="348">单位 ms</text>
+<text class="t-s" x="20" y="222">延后</text>
+<text class="t-s" x="20" y="438">提前</text>
+<text class="t-m" x="144" y="222" text-anchor="end">+450</text>
+<text class="t-m" x="144" y="315.6" text-anchor="end">+60</text>
+<text class="t-m" x="144" y="344.4" text-anchor="end">−60</text>
+<text class="t-m" x="144" y="438" text-anchor="end">−450</text>
+<path class="axis" d="M160 550H976"/>
+<path class="tick" d="M160 550V556"/>
+<text class="t-m" x="160" y="571" text-anchor="middle">0</text>
+<path class="tick" d="M240 550V556"/>
+<path class="tick" d="M320 550V556"/>
+<text class="t-m" x="320" y="571" text-anchor="middle">2</text>
+<path class="tick" d="M400 550V556"/>
+<path class="tick" d="M480 550V556"/>
+<text class="t-m" x="480" y="571" text-anchor="middle">4</text>
+<path class="tick" d="M560 550V556"/>
+<path class="tick" d="M640 550V556"/>
+<text class="t-m" x="640" y="571" text-anchor="middle">6</text>
+<path class="tick" d="M720 550V556"/>
+<path class="tick" d="M800 550V556"/>
+<text class="t-m" x="800" y="571" text-anchor="middle">8</text>
+<path class="tick" d="M880 550V556"/>
+<path class="tick" d="M960 550V556"/>
+<text class="t-m" x="960" y="571" text-anchor="middle">10</text>
+<text class="t-s" x="20" y="571">时间（秒）</text>
+</svg>
+</div>
+      <dl class="io">
+        <div><dt>入 · IN</dt><dd>清理后的干声；原唱参考轨的字句线索</dd></div>
+        <div><dt>变 · Δ</dt><dd>先判全局偏移，再按整句进点，最后在可信锚点之间有限变时（桌面默认上限 ±10%）</dd></div>
+        <div><dt>出 · OUT</dt><dd>与原唱节奏对齐的人声；无可靠对应处保持原位</dd></div>
+      </dl>
+    </div>
+    <figcaption>示意时间轴，未施加全局偏移。各行使用同一时间尺度，可以直接比较入点和句长。</figcaption>
+  </figure>
+  <div class="notes">
+    <p><strong>全局偏移。</strong>先判断整条录音是否系统性早进或晚进。中文路径用 HuBERT 强制对齐提取字句线索，再用多组对应和声学入点核验整体偏移。</p>
+    <p><strong>整句进点。</strong>匹配顺序、偏差和两侧停顿都支持时，才移动一句的位置。两侧停顿优先吸收位移，连续演唱保持连贯。</p>
+    <p><strong>句内变时。</strong>可信锚点之间用 Signalsmith 按连续时间映射有限伸缩，桌面默认上限为 ±10%。没有可信对应的片段保留原有顺序和局部速度。即使旁路节奏修正，中文路径仍可为开启的音高修正独立匹配参考。</p>
+  </div>
+</section>
 
-<h2><span class="idx">05</span>需要知道的限制</h2>
-<table>
-  <tr><th>情况</th><th>可能的表现</th></tr>
-  <tr><td>漏唱、改了歌词或即兴发挥</td><td>程序会尝试跳过缺失字句并保护不确定片段，但识别和匹配仍可能出错</td></tr>
-  <tr><td>气声、特别高或特别低的音</td><td>程序可能听错音高，修出来偶尔会有轻微杂音</td></tr>
-  <tr><td>原曲拆分不干净</td><td>伴奏里残留的原唱会和你的声音叠在一起，听起来像合唱</td></tr>
-  <tr><td>原曲和你跟唱的版本不同</td><td>比如现场版和录音室版，对齐效果会变差</td></tr>
-</table>
-<p class="note">建议每次处理完都用“修音前 / 修音后”对比听一下再保存。</p>
+<section class="chapter" id="pitch" aria-labelledby="pitch-heading">
+  <div class="chapter-head"><span class="number" aria-hidden="true">03</span><h2 id="pitch-heading">修正音高中心，保留演唱起伏</h2></div>
+  <figure class="fig">
+    <div class="plate">
+      <div class="plate-head"><span class="fig-id">FIG.03</span><p class="plate-title">音高中心移动与无参考区旁路</p><span class="plate-flag">示意输入 · 项目算法实算</span></div>
+      <ul class="key" aria-label="图例">
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><rect class="note" x="1" y="4" width="26" height="8"/></svg>原唱音高中心</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="pc-ink" d="M0 6H44"/></svg>原演唱基频</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="pc-red" d="M0 6H44"/></svg>修正后基频、移调量</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="pc-diff" d="M0 6H44"/></svg>与参考的差距</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="gt gd" d="M0 6H44"/></svg>±300 音分保护线</li>
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><rect class="strip" x="1" y="5" width="26" height="6"/></svg>有可靠参考的字音</li>
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><rect fill="url(#hatch-l)" x="1" y="1" width="26" height="14" stroke="#6f7b86"/></svg>无可靠对应</li>
+      </ul>
+      <p class="scroll-hint">图板可横向滚动，继续查看右侧内容。</p>
+      <div class="canvas" tabindex="0" role="region" aria-label="音高修正曲线，可横向滚动"><svg viewBox="0 0 1000 530" role="img" aria-labelledby="fig03-t fig03-d">
+<title id="fig03-t">音高中心移动与无参考区旁路</title>
+<desc id="fig03-d">同一时间轴上，可信区域的修正曲线向参考中心靠拢，并保留原始曲线的小幅起伏。右侧失去可靠参考后，修正曲线回到原演唱。</desc>
+<rect class="rail" width="150" height="530"/>
+<path class="rule" d="M150 0V530"/>
+<rect fill="url(#hatch-l)" x="776" y="36" width="200" height="464"/>
+<path class="rule" d="M776 36V500"/>
+<path class="rule" d="M0 332H1000"/>
+<path class="grid" d="M150 294H980"/>
+<path class="grid" d="M150 270H980"/>
+<path class="grid" d="M150 246H980"/>
+<path class="grid" d="M150 222H980"/>
+<path class="grid" d="M150 198H980"/>
+<path class="grid" d="M150 174H980"/>
+<path class="grid" d="M150 150H980"/>
+<path class="grid" d="M150 126H980"/>
+<path class="grid" d="M150 102H980"/>
+<path class="grid" d="M150 78H980"/>
+<rect class="note" x="246.4" y="242.5" width="27.2" height="8"/>
+<rect class="note" x="282.4" y="194.2" width="28" height="8"/>
+<rect class="note" x="318.4" y="242.5" width="27.2" height="8"/>
+<rect class="note" x="354.4" y="290.2" width="28" height="8"/>
+<rect class="note" x="478.4" y="290" width="33.6" height="8"/>
+<rect class="note" x="520.8" y="241.7" width="32.8" height="8"/>
+<rect class="note" x="562.4" y="195.4" width="21.6" height="8"/>
+<rect class="note" x="592.8" y="170.8" width="24.8" height="8"/>
+<rect class="note" x="626.4" y="194.5" width="35.2" height="8"/>
+<rect class="note" x="671.2" y="243.4" width="39.2" height="8"/>
+<path class="pc-ink" d="M240 272.4L241.6 272.2L243.2 271.8L244.8 271.6L246.4 271.9L248 272.9L249.6 273.9L251.2 274.5L252.8 274.1L254.4 272.6L256 270.6L257.6 269.2L259.2 269.1L260.8 270.7L262.4 273.5L264 276.1L265.6 277.2L267.2 276.1L268.8 273.1L270.4 269.6L272 267.4M276.8 181.2L278.4 180.8L280 180.5L281.6 180.5L283.2 181.2L284.8 182.2L286.4 183.1L288 183.2L289.6 182.2L291.2 180.4L292.8 178.6L294.4 177.7L296 178.5L297.6 180.8L299.2 183.6L300.8 185.7L302.4 185.8L304 183.6L305.6 180L307.2 177L308.8 175.9M312 282L313.6 281.8L315.2 281.4L316.8 281.2L318.4 281.5L320 282.5L321.6 283.5L323.2 284.1L324.8 283.7L326.4 282.2L328 280.2L329.6 278.8L331.2 278.7L332.8 280.3L334.4 283.1L336 285.7L337.6 286.8L339.2 285.7L340.8 282.7L342.4 279.2L344 277M348.8 272.4L350.4 272L352 271.7L353.6 271.7L355.2 272.4L356.8 273.4L358.4 274.3L360 274.4L361.6 273.4L363.2 271.6L364.8 269.8L366.4 268.9L368 269.7L369.6 272L371.2 274.8L372.8 276.9L374.4 277L376 274.8L377.6 271.2L379.2 268.2L380.8 267.1M473.6 279.5L475.2 279L476.8 278.8L478.4 279.1L480 280L481.6 281L483.2 281.6L484.8 281.5L486.4 280.3L488 278.6L489.6 276.9L491.2 276.1L492.8 276.8L494.4 278.8L496 281.4L497.6 283.7L499.2 284.4L500.8 283.2L502.4 280.3L504 277L505.6 274.8L507.2 274.5L508.8 276.2L510.4 279.4M515.2 267.6L516.8 267.2L518.4 266.9L520 266.9L521.6 267.5L523.2 268.5L524.8 269.4L526.4 269.7L528 268.9L529.6 267.3L531.2 265.5L532.8 264.3L534.4 264.4L536 266.1L537.6 268.7L539.2 271.2L540.8 272.4L542.4 271.6L544 268.8L545.6 265.4L547.2 262.9L548.8 262.4L550.4 264L552 267.2M556.8 152.4L558.4 152L560 151.7L561.6 151.7L563.2 152.4L564.8 153.5L566.4 154.4L568 154.3L569.6 152.9L571.2 150.9L572.8 149.3L574.4 149.1L576 150.9L577.6 153.8L579.2 156.5L580.8 157.2L582.4 155.3L584 151.6M587.2 82.8L588.8 82.4L590.4 82.1L592 82.1L593.6 82.9L595.2 84.1L596.8 84.9L598.4 84.5L600 82.8L601.6 80.7L603.2 79.4L604.8 80L606.4 82.5L608 85.6L609.6 87.5L611.2 86.8L612.8 83.6L614.4 79.7L616 77.6M620.8 231.4L622.4 231L624 230.8L625.6 231.1L627.2 232L628.8 233.1L630.4 233.7L632 233.3L633.6 232L635.2 230.1L636.8 228.5L638.4 228.2L640 229.5L641.6 232.1L643.2 234.7L644.8 236.3L646.4 235.8L648 233.3L649.6 229.8L651.2 227.1L652.8 226.4L654.4 228L656 231.1L657.6 234.6L659.2 236.6L660.8 236.5M665.6 233.8L667.2 233.4L668.8 233.2L670.4 233.5L672 234.4L673.6 235.5L675.2 236.1L676.8 235.8L678.4 234.4L680 232.5L681.6 231L683.2 230.6L684.8 231.9L686.4 234.4L688 237.1L689.6 238.7L691.2 238.3L692.8 235.8L694.4 232.3L696 229.6L697.6 228.7L699.2 230.2L700.8 233.4L702.4 236.8L704 239L705.6 239L707.2 236.8L708.8 233.4L710.4 230.3M784 166.8L785.6 166.6L787.2 166.2L788.8 166L790.4 166.3L792 167.3L793.6 168.3L795.2 168.9L796.8 168.5L798.4 167L800 165L801.6 163.6L803.2 163.5L804.8 165.1L806.4 167.9L808 170.5L809.6 171.6L811.2 170.5L812.8 167.5L814.4 164L816 161.8L817.6 161.9L819.2 164.3L820.8 167.8L822.4 170.9L824 172.1L825.6 170.9L827.2 167.8L828.8 164.3M832 130.8L833.6 130.6L835.2 130.2L836.8 130L838.4 130.3L840 131.3L841.6 132.3L843.2 132.9L844.8 132.5L846.4 131L848 129L849.6 127.6L851.2 127.5L852.8 129.1L854.4 131.9L856 134.5L857.6 135.6L859.2 134.5L860.8 131.5L862.4 128L864 125.8L865.6 125.9L867.2 128.3L868.8 131.8L870.4 134.9L872 136.1M876.8 164.4L878.4 164L880 163.7L881.6 163.7L883.2 164.4L884.8 165.4L886.4 166.3L888 166.4L889.6 165.4L891.2 163.6L892.8 161.8L894.4 160.9L896 161.7L897.6 164L899.2 166.8L900.8 168.9L902.4 169L904 166.8L905.6 163.2L907.2 160.2L908.8 159.1L910.4 160.4L912 163.6L913.6 167.1L915.2 169.4L916.8 169.4M920 200.4L921.6 200.2L923.2 199.8L924.8 199.6L926.4 199.9L928 200.9L929.6 201.9L931.2 202.5L932.8 202.1L934.4 200.6L936 198.6L937.6 197.2L939.2 197.1L940.8 198.7L942.4 201.5L944 204.1L945.6 205.2L947.2 204.1L948.8 201.1L950.4 197.6L952 195.4L953.6 195.5L955.2 197.9L956.8 201.4L958.4 204.5L960 205.7L961.6 204.5L963.2 201.4L964.8 197.9"/>
+<path class="pc-red" d="M246.4 258.8L248 254L249.6 254.5L251.2 254.5L252.8 253.8L254.4 252.2L256 250.3L257.6 249.2L259.2 249.6L260.8 251.5L262.4 254.4L264 256.9L265.6 257.8L267.2 256.3L268.8 252.6L270.4 248.9L272 247.8M283.2 193.9L284.8 195.5L286.4 195.8L288 195.4L289.6 194.3L291.2 192.5L292.8 190.8L294.4 190.4L296 191.6L297.6 194.1L299.2 197L300.8 198.9L302.4 198.6L304 195.8L305.6 191.9L307.2 188.6L308.8 186.8M318.4 263.4L320 256.4L321.6 256.9L323.2 256.9L324.8 256.2L326.4 254.6L328 252.7L329.6 251.6L331.2 252L332.8 253.9L334.4 256.8L336 259.3L337.6 260.3L339.2 258.7L340.8 255L342.4 251.3L344 250.6M355.2 288.5L356.8 290.3L358.4 290.6L360 290.2L361.6 289.1L363.2 287.3L364.8 285.6L366.4 285.2L368 286.4L369.6 288.9L371.2 291.8L372.8 293.7L374.4 293.4L376 290.6L377.6 286.7L379.2 283.4L380.8 281.4M478.4 287.4L480 291.6L481.6 292.2L483.2 292.2L484.8 291.6L486.4 290.3L488 288.6L489.6 287.2L491.2 287L492.8 288.2L494.4 290.5L496 293.2L497.6 295.3L499.2 295.8L500.8 294L502.4 290.5L504 287L505.6 284.7L507.2 284.4L508.8 286.2L510.4 288.7M521.6 253.2L523.2 253L524.8 253.3L526.4 252.9L528 251.9L529.6 250.2L531.2 248.5L532.8 247.8L534.4 248.5L536 250.5L537.6 253.2L539.2 255.7L540.8 256.6L542.4 255.2L544 251.8L545.6 248.2L547.2 245.6L548.8 245.1L550.4 246.8L552 251M563.2 185.5L564.8 188.3L566.4 188.7L568 188.1L569.6 186.7L571.2 184.7L572.8 183.3L574.4 183.6L576 185.6L577.6 188.6L579.2 191.1L580.8 191.3L582.4 186.9M627.2 209.1L628.8 208.3L630.4 208.3L632 207.6L633.6 206.1L635.2 204.3L636.8 203.1L638.4 203.4L640 205.1L641.6 207.8L643.2 210.5L644.8 211.9L646.4 211.2L648 208.2L649.6 204.2L651.2 201.2L652.8 200.4L654.4 202L656 205.3L657.6 209.1L659.2 212L660.8 219.5M672 243.7L673.6 244.9L675.2 244.9L676.8 244.2L678.4 242.7L680 240.9L681.6 239.7L683.2 240L684.8 241.7L686.4 244.3L688 247L689.6 248.5L691.2 247.8L692.8 244.8L694.4 240.9L696 237.9L697.6 237L699.2 238.5L700.8 241.8L702.4 245.6L704 248.4L705.6 249.1L707.2 247.2L708.8 243.3"/>
+<path class="ln ln-dim" d="M572.8 149.3V179.3"/>
+<path class="gt gd" d="M572.8 187.3V437.9"/>
+<text class="t-s halo" x="563.8" y="171.3" text-anchor="end">移调量</text>
+<path class="ln ln-dim ln-both" d="M605.2 167.8V86.9"/>
+<text class="t-s halo" x="614.2" y="133.8">差距</text>
+<path class="gt gd" d="M150 376H980"/>
+<path class="gt gd" d="M150 460H980"/>
+<path class="zero" d="M150 418H980"/>
+<path class="pc-diff" d="M246.4 418V402.7H273.6V418"/>
+<path class="pc-diff" d="M282.4 418V427.8H310.4V418"/>
+<path class="pc-diff" d="M318.4 418V397.1H345.6V418"/>
+<path class="pc-diff" d="M354.4 418V430.6H382.4V418"/>
+<path class="pc-diff" d="M478.4 418V426.5H512V418"/>
+<path class="pc-diff" d="M520.8 418V405.4H553.6V418"/>
+<path class="pc-diff" d="M562.4 418V444.8H584V418"/>
+<path class="pc-diff" d="M592.8 418V471.6H617.6V418"/>
+<path class="pc-diff" d="M626.4 418V398.5H661.6V418"/>
+<path class="pc-diff" d="M671.2 418V425.6H710.4V418"/>
+<path class="curve" d="M160 418L245.6 418L246.4 410.3L247.2 407.7L248 407L248.8 406.8L249.6 406.7L250.4 406.5L251.2 406.3L252 406.2L252.8 406.2L253.6 406.1L254.4 406.1L255.2 406.1L256 406.2L256.8 406.2L257.6 406.3L258.4 406.5L259.2 406.6L260 406.7L260.8 406.8L261.6 406.8L262.4 406.9L263.2 406.9L264 406.8L264.8 406.8L265.6 406.7L266.4 406.6L267.2 406.4L268 406.2L268.8 406.1L269.6 406L270.4 405.9L271.2 405.9L272 406.5L272.8 409.5L273.6 418L281.6 418L282.4 423.6L283.2 425.4L284 425.8L284.8 425.7L285.6 425.6L286.4 425.4L287.2 425.2L288 425.1L288.8 425.1L289.6 425L290.4 425L291.2 425L292 425.1L292.8 425.1L293.6 425.2L294.4 425.4L295.2 425.5L296 425.6L296.8 425.7L297.6 425.7L298.4 425.8L299.2 425.8L300 425.7L300.8 425.7L301.6 425.6L302.4 425.5L303.2 425.3L304 425.1L304.8 425L305.6 424.9L306.4 424.8L307.2 424.8L308 424.7L308.8 424.4L309.6 422.7L310.4 418L317.6 418L318.4 407.4L319.2 403.7L320 402.8L320.8 402.6L321.6 402.5L322.4 402.3L323.2 402.1L324 402L324.8 402L325.6 401.9L326.4 401.9L327.2 401.9L328 402L328.8 402L329.6 402.1L330.4 402.3L331.2 402.4L332 402.5L332.8 402.6L333.6 402.6L334.4 402.7L335.2 402.7L336 402.6L336.8 402.6L337.6 402.5L338.4 402.4L339.2 402.2L340 402L340.8 401.9L341.6 401.8L342.4 401.7L343.2 401.7L344 402.6L344.8 406.5L345.6 418L353.6 418L354.4 425L355.2 427.4L356 427.9L356.8 427.8L357.6 427.7L358.4 427.5L359.2 427.3L360 427.2L360.8 427.2L361.6 427.1L362.4 427.1L363.2 427.1L364 427.2L364.8 427.2L365.6 427.3L366.4 427.5L367.2 427.6L368 427.7L368.8 427.8L369.6 427.8L370.4 427.9L371.2 427.9L372 427.8L372.8 427.8L373.6 427.7L374.4 427.6L375.2 427.4L376 427.2L376.8 427.1L377.6 427L378.4 426.9L379.2 426.9L380 426.8L380.8 426.3L381.6 424.2L382.4 418L477.6 418L478.4 422.8L479.2 424.5L480 424.8L480.8 424.7L481.6 424.5L482.4 424.3L483.2 424.2L484 424L484.8 423.9L485.6 423.8L486.4 423.8L487.2 423.8L488 423.8L488.8 423.9L489.6 424L490.4 424.1L491.2 424.3L492 424.5L492.8 424.7L493.6 424.8L494.4 424.8L495.2 424.9L496 424.9L496.8 424.8L497.6 424.8L498.4 424.7L499.2 424.6L500 424.5L500.8 424.3L501.6 424.1L502.4 424L503.2 423.9L504 423.8L504.8 423.8L505.6 423.8L506.4 423.8L508 423.8L508.8 423.8L509.6 423.8L510.4 423.4L511.2 422L512 418L520 418L520.8 411.8L521.6 409.6L522.4 409.1L523.2 408.9L524 408.8L524.8 408.6L525.6 408.4L526.4 408.2L527.2 408.1L528 408.1L528.8 408L529.6 408L530.4 408.1L531.2 408.1L532 408.2L532.8 408.4L533.6 408.5L534.4 408.7L535.2 408.8L536 408.9L536.8 409L537.6 409L538.4 409L539.2 408.9L540 408.9L540.8 408.8L541.6 408.6L542.4 408.4L543.2 408.2L544 408.1L544.8 408L545.6 407.9L546.4 407.9L547.2 407.9L548 407.9L548.8 407.9L549.6 407.9L550.4 407.9L551.2 408L552 408.6L552.8 411L553.6 418L561.6 418L562.4 432.4L563.2 437.3L564 438.3L564.8 438.3L565.6 438.1L566.4 438L567.2 437.9L568 437.8L568.8 437.7L569.6 437.7L570.4 437.7L571.2 437.7L572 437.8L572.8 437.9L573.6 438L574.4 438.1L575.2 438.2L576 438.2L576.8 438.3L577.6 438.3L578.4 438.2L579.2 438.2L580 438.1L580.8 437.9L581.6 437.7L582.4 436.5L583.2 431.6L584 418L625.6 418L626.4 408.1L627.2 404.6L628 403.8L628.8 403.5L629.6 403.3L630.4 403.2L631.2 403L632 403L632.8 402.9L633.6 402.9L634.4 402.9L635.2 402.9L636 403L636.8 403.2L637.6 403.3L638.4 403.5L639.2 403.7L640 403.8L640.8 403.8L641.6 403.8L642.4 403.8L643.2 403.8L644 403.8L644.8 403.8L645.6 403.7L646.4 403.6L647.2 403.5L648 403.3L648.8 403.2L649.6 403.1L650.4 403L651.2 402.9L652 402.9L652.8 402.9L653.6 402.9L654.4 402.9L655.2 402.9L656 402.9L656.8 403L657.6 403.1L658.4 403.3L659.2 403.6L660 404.6L660.8 408.1L661.6 418L670.4 418L671.2 422.1L672 423.4L672.8 423.6L673.6 423.5L674.4 423.3L675.2 423.1L676 423L676.8 422.9L677.6 422.9L678.4 422.9L679.2 422.9L680 422.9L680.8 423L681.6 423.1L682.4 423.3L683.2 423.5L684 423.6L684.8 423.7L685.6 423.8L686.4 423.8L687.2 423.8L688 423.8L688.8 423.8L689.6 423.7L690.4 423.6L691.2 423.5L692 423.4L692.8 423.2L693.6 423.1L694.4 423L695.2 422.9L696 422.9L696.8 422.8L697.6 422.8L698.4 422.8L699.2 422.8L700 422.9L700.8 422.9L701.6 423L702.4 423.1L703.2 423.3L704 423.5L704.8 423.7L705.6 423.9L706.4 424L707.2 424.1L708 424.1L708.8 423.8L709.6 422.3L710.4 418L974.4 418"/>
+<rect class="strip" x="246.4" y="478" width="27.2" height="6"/>
+<rect class="strip" x="282.4" y="478" width="28" height="6"/>
+<rect class="strip" x="318.4" y="478" width="27.2" height="6"/>
+<rect class="strip" x="354.4" y="478" width="28" height="6"/>
+<rect class="strip" x="478.4" y="478" width="33.6" height="6"/>
+<rect class="strip" x="520.8" y="478" width="32.8" height="6"/>
+<rect class="strip" x="562.4" y="478" width="21.6" height="6"/>
+<rect class="strip" x="592.8" y="478" width="24.8" height="6"/>
+<rect class="strip" x="626.4" y="478" width="35.2" height="6"/>
+<rect class="strip" x="671.2" y="478" width="39.2" height="6"/>
+<text class="t-s" x="166" y="54">可信参考</text>
+<text class="t-s" x="786" y="54">无可靠对应</text>
+<text class="t-s" x="170" y="448.6">实际移调 = 差距 × 75%</text>
+<text class="t-s halo" x="624" y="450">差距超过 300 音分，整个音符不修</text>
+<text class="t-s halo" x="786" y="408">无参考：不修</text>
+<text class="t-h" x="20" y="60">音高曲线</text>
+<path class="tick" d="M134 270V294M129 270H139M129 294H139"/>
+<text class="t-s" x="124" y="280" text-anchor="end">1 半音</text>
+<text class="t-s" x="124" y="297" text-anchor="end">= 100 音分</text>
+<text class="t-h" x="20" y="356">差距与移调量</text>
+<text class="t-s" x="20" y="374">单位：音分</text>
+<text class="t-m" x="144" y="380" text-anchor="end">+300</text>
+<text class="t-m" x="144" y="422" text-anchor="end">0</text>
+<text class="t-m" x="144" y="464" text-anchor="end">−300</text>
+<text class="t-s" x="20" y="484">有可靠参考的字音</text>
+<path class="axis" d="M160 500H976"/>
+<path class="tick" d="M160 500V506"/>
+<text class="t-m" x="160" y="521" text-anchor="middle">0</text>
+<path class="tick" d="M240 500V506"/>
+<path class="tick" d="M320 500V506"/>
+<text class="t-m" x="320" y="521" text-anchor="middle">2</text>
+<path class="tick" d="M400 500V506"/>
+<path class="tick" d="M480 500V506"/>
+<text class="t-m" x="480" y="521" text-anchor="middle">4</text>
+<path class="tick" d="M560 500V506"/>
+<path class="tick" d="M640 500V506"/>
+<text class="t-m" x="640" y="521" text-anchor="middle">6</text>
+<path class="tick" d="M720 500V506"/>
+<path class="tick" d="M800 500V506"/>
+<text class="t-m" x="800" y="521" text-anchor="middle">8</text>
+<path class="tick" d="M880 500V506"/>
+<path class="tick" d="M960 500V506"/>
+<text class="t-m" x="960" y="521" text-anchor="middle">10</text>
+<text class="t-s" x="20" y="521">时间（秒）</text>
+</svg>
+</div>
+      <dl class="io">
+        <div><dt>入 · IN</dt><dd>对齐后的演唱基频；原唱基频（每秒 100 帧）</dd></div>
+        <div><dt>变 · Δ</dt><dd>参考折回演唱音区，按可信度、强度和上限生成移调曲线，主要移动音高中心</dd></div>
+        <div><dt>出 · OUT</dt><dd>修正音高后的人声；全零移调处直接旁路</dd></div>
+      </dl>
+    </div>
+    <figcaption>原理曲线，非录音测量。纵向箭头表示某一时刻的移调量，右侧示意零移调。</figcaption>
+  </figure>
+  <div class="notes">
+    <p><strong>提取与匹配。</strong>FCPE 分别估计演唱和原唱的基频，按每秒 100 帧记录。节奏变时后重测演唱基频。中文路径会按可信字音对应，在当前演唱时间上取原唱参考。</p>
+    <p><strong>计算目标。</strong>参考会折回演唱者的音区。程序按可信度、设置强度和移调上限生成控制曲线，兼顾长音的缓慢中心与稳定的短错音。桌面默认的「修正」50 对应音高修正强度 75%。无可靠对应或无法确定八度时会保守处理。</p>
+    <p><strong>渲染波形。</strong>Signalsmith 按控制曲线移动音高，音高处理保持波形长度，并使用演唱基频辅助共振峰补偿。曲线主要推动音高中心，因此能保留原唱法中的颤音和滑音特征。全零移调直接旁路。</p>
+  </div>
+</section>
 
-<h2><span class="idx">06</span>用到的开源工具</h2>
-<table>
-  <tr><th>工具</th><th>用在哪一步</th></tr>
-  <tr><td>MDX-Net（Kim Vocal 2 模型）</td><td>第 2 步，拆分人声和伴奏</td></tr>
-  <tr><td>FCPE</td><td>第 3 步，听出音高（第 4 步对齐后会再听一次）</td></tr>
-  <tr><td>Sync Toolbox</td><td>第 4 步，找出你和原唱的对应关系</td></tr>
-  <tr><td>Rubber Band</td><td>第 4 步，调整快慢而不改变音高</td></tr>
-  <tr><td>Praat</td><td>第 6 步，在原声上调整音高</td></tr>
-  <tr><td>FFmpeg</td><td>第 1、7、8 步，读取音频和测量音量</td></tr>
-</table>
-<p class="note">其中 Praat 和 Rubber Band 采用 GPL 开源协议：自己使用没有限制；如果要把这个程序发给别人，需要一并提供源代码。完整说明见程序目录里的 THIRD_PARTY.txt。</p>
+<section class="chapter" id="mix" aria-labelledby="mix-heading">
+  <div class="chapter-head"><span class="number" aria-hidden="true">04</span><h2 id="mix-heading">人声和伴奏汇合，再做整曲母带</h2></div>
+  <figure class="fig">
+    <div class="plate">
+      <div class="plate-head"><span class="fig-id">FIG.04</span><p class="plate-title">后期控制如何作用在人声、伴奏和母带</p><span class="plate-flag">示意 · 非实测</span></div>
+      <ul class="key" aria-label="图例">
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-sig" d="M0 6H44"/></svg>人声信号</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-aud" d="M0 6H44"/></svg>伴奏音频</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-ctl" d="M0 6H44"/></svg>控件与人声检测</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-ref" d="M0 6H44"/></svg>导出后回读</li>
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><g class="node n-in"><path class="frame" d="M1 1H21L27 7V15H1Z"/></g></svg>输入</li>
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><g class="node n-proc"><path class="frame" d="M1 1H21L27 7V15H1Z"/><path class="bar-sig" d="M1 1H21V5H1Z"/></g></svg>处理</li>
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><g class="node n-out"><path class="frame" d="M1 1H21L27 7V15H1Z"/></g></svg>输出</li>
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><g class="node n-ref"><path class="frame" d="M1 1H21L27 7V15H1Z"/></g></svg>回读</li>
+      </ul>
+      <p class="scroll-hint">图板可横向滚动，继续查看右侧内容。</p>
+      <div class="canvas" tabindex="0" role="region" aria-label="混音与母带信号图，可横向滚动"><svg viewBox="0 0 1000 436" role="img" aria-labelledby="fig04-t fig04-d">
+<title id="fig04-t">后期控制如何作用在人声、伴奏和母带</title>
+<desc id="fig04-d">校正后人声调整电平和音色，伴奏在 250–4000 Hz 按人声避让，两路汇合并加入空间处理。混音推子控制光学压缩密度，固定目标的 C+ 母带调整响度并限制真峰值。</desc>
+<rect class="lane-a" y="0" width="1000" height="214"/>
+<rect class="lt" x="20" y="8" width="16" height="16"/>
+<text class="t-m t-w" x="28" y="20" text-anchor="middle">A</text>
+<text class="t-s" x="44" y="21">人声 · 主信号链</text>
+<rect class="lane-b" y="214" width="1000" height="222"/>
+<rect class="lt" x="20" y="222" width="16" height="16"/>
+<text class="t-m t-w" x="28" y="234" text-anchor="middle">B</text>
+<text class="t-s" x="44" y="235">伴奏 · 导出</text>
+<path class="rule" d="M0 214H1000"/>
+<path class="ln ln-sig" d="M155 106H185"/>
+<path class="ln ln-sig" d="M320 106H350"/>
+<path class="ln ln-sig" d="M485 106H515"/>
+<path class="ln ln-sig" d="M650 106H680"/>
+<path class="ln ln-sig" d="M815 106H845"/>
+<path class="ln ln-aud" d="M155 298H350"/>
+<path class="ln ln-aud" d="M485 298H582.5V166"/>
+<path class="ln ln-ctl" d="M417.5 166V262"/>
+<path class="ln ln-ref" d="M912.5 166V262"/>
+<g class="node n-in" data-node="a1"><path class="frame" d="M20 70H146L155 79V166H20Z"/><text class="t-m" x="30" y="85">IN</text><rect class="win" x="30" y="90" width="115" height="32"/><g class="gl" transform="translate(30 90)"><path class="gs" d="M1.8 15V17M5.2 14V18M8.8 13V19M12.2 11V21M15.8 9V23M19.2 8V24M22.8 9V23M26.2 10V22M29.8 12V20M33.2 14V18M36.8 15V17M40.2 14V18M43.8 12V20M47.2 9V23M50.8 6V26M54.2 4V28M57.8 3V29M61.2 5V27M64.8 7V25M68.2 9V23M71.8 11V21M75.2 13V19M78.8 15V17M82.2 14V18M85.8 12V20M89.2 10V22M92.8 7V25M96.2 5V27M99.8 6V26M103.2 9V23M106.8 12V20M110.2 14V18M113.8 15V17"/></g><text class="t-h" x="30" y="142">校正后人声</text><text class="t-s" x="30" y="159">修音后的干声</text></g>
+<g class="node n-proc" data-node="a2"><path class="frame" d="M185 70H311L320 79V166H185Z"/><path class="bar-sig" d="M185 70H311V74H185Z"/><text class="t-m" x="195" y="85">01</text><rect class="win" x="195" y="90" width="115" height="32"/><g class="gl" transform="translate(195 90)"><path class="gs" d="M4 14V18M7.5 13V19M11 14V18M14.5 13V19M18 14V18M21.5 13V19M25 14V18M28.5 13V19"/><path class="gg" d="M42 16H60M54 11L60 16L54 21"/><path class="gs" d="M66 11V21M69.5 8V24M73 10V22M76.5 7V25M80 11V21M83.5 8V24M87 10V22M90.5 7V25M94 11V21M97.5 8V24M101 10V22M104.5 7V25"/></g><text class="t-h" x="195" y="142">人声配比</text><text class="t-s" x="195" y="159">相对电平</text></g>
+<g class="node n-proc" data-node="a3"><path class="frame" d="M350 70H476L485 79V166H350Z"/><path class="bar-sig" d="M350 70H476V74H350Z"/><text class="t-m" x="360" y="85">02</text><rect class="win" x="360" y="90" width="115" height="32"/><g class="gl" transform="translate(360 90)"><path class="gt gd" d="M0 16H115"/><path class="gs" d="M2 18C14 18 18 9 30 9C42 9 44 21 58 21C72 21 74 12 86 12C98 12 104 16 113 16"/></g><text class="t-h" x="360" y="142">音色处理</text><text class="t-s" x="360" y="159">均衡、压缩、去齿</text></g>
+<g class="node n-proc" data-node="a4"><path class="frame" d="M515 70H641L650 79V166H515Z"/><path class="bar-sig" d="M515 70H641V74H515Z"/><text class="t-m" x="525" y="85">03</text><rect class="win" x="525" y="90" width="115" height="32"/><g class="gl" transform="translate(525 90)"><path class="gs" d="M4 13V19M7.5 9V23M11 6V26M14.5 10V22M18 13V19"/><path class="gg" d="M26 9V23M29.5 10V22M33 11V21M36.5 12V20M40 12.5V19.5M43.5 13V19M47 13.6V18.4M50.5 14V18M54 14.4V17.6M57.5 14.8V17.2M61 15V17"/><path class="gb" d="M70 11V21M84 13.5V18.5"/></g><text class="t-h" x="525" y="142">干湿汇合</text><text class="t-s" x="525" y="159">混响、延迟</text></g>
+<g class="node n-proc" data-node="a5"><path class="frame" d="M680 70H806L815 79V166H680Z"/><path class="bar-sig" d="M680 70H806V74H680Z"/><text class="t-m" x="690" y="85">04</text><rect class="win" x="690" y="90" width="115" height="32"/><g class="gl" transform="translate(690 90)"><path class="gb" d="M5.2 7V8M5.2 24V25M8.8 4V8M8.8 24V28M12.2 1V8M12.2 24V31M15.8 2V8M15.8 24V30M19.2 5V8M19.2 24V27M29.8 7V8M29.8 24V25M33.2 3V8M33.2 24V29M36.8 1V8M36.8 24V31M40.2 2V8M40.2 24V30M43.8 4V8M43.8 24V28M47.2 6V8M47.2 24V26M61.2 4V8M61.2 24V28M64.8 1V8M64.8 24V31M68.2 2V8M68.2 24V30M71.8 5V8M71.8 24V27M78.8 6V8M78.8 24V26M82.2 2V8M82.2 24V30M85.8 1V8M85.8 24V31M89.2 3V8M89.2 24V29M92.8 5V8M92.8 24V27M103.2 7V8M103.2 24V25M106.8 3V8M106.8 24V29M110.2 2V8M110.2 24V30M113.8 7V8M113.8 24V25"/><path class="gt gd" d="M0 8H115M0 24H115"/><path class="gs" d="M1.8 10V22M5.2 8V24M8.8 8V24M12.2 8V24M15.8 8V24M19.2 8V24M22.8 8V24M26.2 11V21M29.8 8V24M33.2 8V24M36.8 8V24M40.2 8V24M43.8 8V24M47.2 8V24M50.8 9V23M54.2 12V20M57.8 8V24M61.2 8V24M64.8 8V24M68.2 8V24M71.8 8V24M75.2 9V23M78.8 8V24M82.2 8V24M85.8 8V24M89.2 8V24M92.8 8V24M96.2 8V24M99.8 11V21M103.2 8V24M106.8 8V24M110.2 8V24M113.8 8V24"/></g><text class="t-h" x="690" y="142">C+ 母带</text><text class="t-s" x="690" y="159">响度与真峰值</text></g>
+<g class="node n-out" data-node="a6"><path class="frame" d="M845 70H971L980 79V166H845Z"/><text class="t-m" x="855" y="85">05</text><rect class="win" x="855" y="90" width="115" height="32"/><g class="gl" transform="translate(855 90)"><path class="gs" d="M1.8 7V25M5.2 4V28M8.8 6V26M12.2 3V29M15.8 5V27M19.2 7V25M22.8 3V29M26.2 2V30M29.8 5V27M33.2 6V26M36.8 3V29M40.2 2V30M43.8 4V28M47.2 7V25M50.8 5V27M54.2 3V29M57.8 2V30M61.2 6V26M64.8 4V28M68.2 3V29M71.8 5V27M75.2 2V30M78.8 3V29M82.2 6V26M85.8 4V28M89.2 2V30M92.8 3V29M96.2 5V27M99.8 6V26M103.2 3V29M106.8 2V30"/><path class="gs" d="M111.5 3V29"/></g><text class="t-h" x="855" y="142">整曲成品</text><text class="t-s" x="855" y="159">WAV</text></g>
+<g class="node n-in" data-node="b1"><path class="frame" d="M20 262H146L155 271V358H20Z"/><text class="t-m" x="30" y="277">IN</text><rect class="win" x="30" y="282" width="115" height="32"/><g class="gl" transform="translate(30 282)"><path class="gs" d="M1.8 7V25M5.2 4V28M8.8 6V26M12.2 3V29M15.8 5V27M19.2 7V25M22.8 3V29M26.2 2V30M29.8 5V27M33.2 6V26M36.8 3V29M40.2 2V30M43.8 4V28M47.2 7V25M50.8 5V27M54.2 3V29M57.8 2V30M61.2 6V26M64.8 4V28M68.2 3V29M71.8 5V27M75.2 2V30M78.8 3V29M82.2 6V26M85.8 4V28M89.2 2V30M92.8 3V29M96.2 5V27M99.8 6V26M103.2 3V29M106.8 2V30M110.2 4V28M113.8 5V27"/></g><text class="t-h" x="30" y="334">立体声伴奏</text><text class="t-s" x="30" y="351">原曲分离所得</text></g>
+<g class="node n-proc" data-node="b2"><path class="frame" d="M350 262H476L485 271V358H350Z"/><path class="bar-ink" d="M350 262H476V266H350Z"/><text class="t-m" x="360" y="277">03</text><rect class="win" x="360" y="282" width="115" height="32"/><g class="gl" transform="translate(360 282)"><path class="gs" d="M1.8 7V25M5.2 4V28M8.8 6V26M12.2 3V29M15.8 5V27M19.2 7V25M22.8 3V29M26.2 2V30M29.8 5V27M33.2 6V26M82.2 6V26M85.8 4V28M89.2 2V30M92.8 3V29M96.2 5V27M99.8 6V26M103.2 3V29M106.8 2V30M110.2 4V28M113.8 5V27"/><path class="gg" d="M36.8 8.8V23.1M40.2 8.3V23.7M43.8 9.4V22.6M47.2 11.1V20.9M50.8 9.9V22.1M54.2 8.8V23.1M57.8 8.3V23.7M61.2 10.5V21.5M64.8 9.4V22.6M68.2 8.8V23.1M71.8 9.9V22.1M75.2 8.3V23.7M78.8 8.8V23.1"/><path class="gt gd" d="M36 3H81M36 29H81"/></g><text class="t-h" x="360" y="334">中频避让</text><text class="t-s" x="360" y="351">250–4000 Hz · 85%</text></g>
+<g class="node n-ref" data-node="b6"><path class="frame" d="M845 262H971L980 271V358H845Z"/><text class="t-m" x="855" y="277">导出后</text><rect class="win" x="855" y="282" width="115" height="32"/><g class="gl" transform="translate(855 282)"><path class="gt" d="M0 24H115"/><path class="gk" d="M4.0 24V18M14.7 24V21M25.4 24V21M36.1 24V21M46.8 24V21M57.5 24V18M68.2 24V21M78.9 24V21M89.6 24V21M100.3 24V21M111.0 24V18"/><path class="gg" d="M66 4V24M60 9L66 4L72 9"/></g><text class="t-h" x="855" y="334">回读测量</text><text class="t-s" x="855" y="351">写入报告</text></g>
+<circle class="dot-sig" cx="155" cy="106" r="2.8"/>
+<circle class="dot-sig" cx="320" cy="106" r="2.8"/>
+<circle class="dot-sig" cx="485" cy="106" r="2.8"/>
+<circle class="dot-sig" cx="650" cy="106" r="2.8"/>
+<circle class="dot-sig" cx="815" cy="106" r="2.8"/>
+<circle class="dot-ink" cx="155" cy="298" r="2.8"/>
+<circle class="dot-ink" cx="485" cy="298" r="2.8"/>
+<circle class="dot" cx="417.5" cy="166" r="2.8"/>
+<circle class="dot" cx="912.5" cy="166" r="2.8"/>
+<rect class="lt" x="228.5" y="26" width="48" height="20"/>
+<text class="t-s t-w" x="235.5" y="41">比例</text>
+<path class="ln ln-ctl" d="M252.5 46V70"/>
+<rect class="lt" x="393.5" y="26" width="48" height="20"/>
+<text class="t-s t-w" x="400.5" y="41">美化</text>
+<path class="ln ln-ctl" d="M417.5 46V70"/>
+<rect class="lt" x="526" y="26" width="113" height="20"/>
+<text class="t-s t-w" x="533" y="41">融合 · 空间</text>
+<path class="ln ln-ctl" d="M582.5 46V70"/>
+<rect class="lt" x="678" y="26" width="139" height="20"/>
+<text class="t-s t-w" x="685" y="41">混音 · 压缩密度</text>
+<path class="ln ln-ctl" d="M747.5 46V70"/>
+<rect class="lt" x="348" y="396" width="139" height="20"/>
+<text class="t-s t-w" x="355" y="411">融合 · 伴奏避让</text>
+<path class="ln ln-ctl" d="M417.5 396V358"/>
+<text class="t-s" x="499" y="411">避让曲线为原减益的 85%</text>
+<text class="t-s" x="427.5" y="240">人声驱动</text>
+<text class="t-s" x="690" y="188">逼近 −8 LUFS-I</text>
+<text class="t-s" x="690" y="205">真峰值 ≤ −0.5 dBTP</text>
+<text class="t-s" x="922.5" y="240">导出后回读</text>
+</svg>
+</div>
+      <dl class="io">
+        <div><dt>入 · IN</dt><dd>校正后人声；立体声伴奏</dd></div>
+        <div><dt>变 · Δ</dt><dd>人声配比与音色，伴奏中频避让，空间处理，汇合后压缩密度，再做 C+ 母带</dd></div>
+        <div><dt>出 · OUT</dt><dd>逼近 −8 LUFS-I、真峰值不超过 −0.5 dBTP 的整曲；导出后回读测量</dd></div>
+      </dl>
+    </div>
+    <figcaption>后期开启时的逻辑链路。点线标出控件和人声检测作用的位置。</figcaption>
+  </figure>
+  <div class="notes">
+    <p><strong>入混前。</strong>校正人声放到成品时间轴上。「修正」启用时，原唱的唱段和演唱活动证据共同约束空档静音，保护仍有有效演唱的区域。</p>
+    <p><strong>工作台四项后期控制。</strong>「美化」调整人声均衡、压缩、去齿等处理。「比例」调整人声相对电平。「融合」调整空间效果与伴奏中频避让，避让曲线为原减益的 85%。「混音」推子调节光学压缩密度。关闭后期时直接合成人声与伴奏，成品仍走固定 C+ 母带。</p>
+    <p><strong>整曲校准。</strong>C+ 在持续限幅减益受控的前提下逼近 −8 LUFS-I，并按 −0.5 dBTP 上限限制真峰值。导出后回读 WAV，报告记录实际读数。</p>
+  </div>
+</section>
 
-<footer>ATUNE 桌面版 v3 · 2026 年 10 月 · 耗时数据来自本机实测</footer>
+<section class="chapter" id="output" aria-labelledby="output-heading">
+  <div class="chapter-head"><span class="number" aria-hidden="true">05</span><h2 id="output-heading">同一播放位置，三种试听来源</h2></div>
+  <figure class="fig">
+    <div class="plate">
+      <div class="plate-head"><span class="fig-id">FIG.05</span><p class="plate-title">试听三源、等响增益和整曲导出分支</p><span class="plate-flag">示意 · 非实测</span></div>
+      <ul class="key" aria-label="图例">
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-aud" d="M0 6H44"/></svg>试听来源</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-sig" d="M0 6H44"/></svg>选中的音频</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-ctl" d="M0 6H44"/></svg>控件</li>
+        <li><svg viewBox="0 0 44 12" aria-hidden="true"><path class="ln ln-ref" d="M0 6H44"/></svg>成品测量流向报告</li>
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><g class="node n-in"><path class="frame" d="M1 1H21L27 7V15H1Z"/></g></svg>输入</li>
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><g class="node n-proc"><path class="frame" d="M1 1H21L27 7V15H1Z"/><path class="bar-sig" d="M1 1H21V5H1Z"/></g></svg>处理</li>
+        <li><svg class="nk" viewBox="0 0 28 16" aria-hidden="true"><g class="node n-out"><path class="frame" d="M1 1H21L27 7V15H1Z"/></g></svg>输出</li>
+      </ul>
+      <p class="scroll-hint">图板可横向滚动，继续查看右侧内容。</p>
+      <div class="canvas" tabindex="0" role="region" aria-label="试听与导出分支图，可横向滚动"><svg viewBox="0 0 1000 410" role="img" aria-labelledby="fig05-t fig05-d">
+<title id="fig05-t">试听三源、等响增益和整曲导出分支</title>
+<desc id="fig05-d">修音前、实时草稿和成品按选择送入同一个播放器。波形读取当前源的原电平，听到的声音可加等响播放增益。成品整曲和报告分别写入文件。</desc>
+<rect class="lane-a" y="0" width="1000" height="262"/>
+<rect class="lt" x="20" y="8" width="16" height="16"/>
+<text class="t-m t-w" x="28" y="20" text-anchor="middle">A</text>
+<text class="t-s" x="44" y="21">试听 · 同一播放位置</text>
+<rect class="lane-b" y="262" width="1000" height="148"/>
+<rect class="lt" x="20" y="270" width="16" height="16"/>
+<text class="t-m t-w" x="28" y="282" text-anchor="middle">B</text>
+<text class="t-s" x="44" y="283">导出 · 写盘</text>
+<path class="rule" d="M0 262H1000"/>
+<path class="ln ln-aud" d="M155 70H250V128H350"/>
+<path class="ln ln-aud" d="M155 186H250V128H350"/>
+<path class="ln ln-aud" d="M155 328H250V128H350"/>
+<path class="ln ln-aud" d="M155 328H350"/>
+<path class="ln ln-sig" d="M485 128H582V70H680"/>
+<path class="ln ln-sig" d="M485 128H582V186H680"/>
+<path class="ln ln-ref" d="M485 328H680"/>
+<g class="node n-in" data-node="s1"><path class="frame" d="M20 34H146L155 43V130H20Z"/><text class="t-m" x="30" y="49">IN</text><rect class="win" x="30" y="54" width="115" height="32"/><g class="gl" transform="translate(30 54)"><path class="gb" d="M1.8 7V25M5.2 4V28M8.8 6V26M12.2 3V29M15.8 5V27M19.2 7V25M22.8 3V29M26.2 2V30M29.8 5V27M33.2 6V26M36.8 3V29M40.2 2V30M43.8 4V28M47.2 7V25M50.8 5V27M54.2 3V29M57.8 2V30M61.2 6V26M64.8 4V28M68.2 3V29M71.8 5V27M75.2 2V30M78.8 3V29M82.2 6V26M85.8 4V28M89.2 2V30M92.8 3V29M96.2 5V27M99.8 6V26M103.2 3V29M106.8 2V30M110.2 4V28M113.8 5V27"/><path class="gs" d="M1.8 12V20M5.2 9V23M8.8 11V21M12.2 7V25M15.8 9V23M19.2 12V20M22.8 6V26M26.2 5V27M29.8 10V22M33.2 11V21M36.8 7V25M40.2 5V27M43.8 8V24M47.2 12V20M50.8 10V22M54.2 6V26M57.8 5V27M61.2 11V21M64.8 8V24M68.2 6V26M71.8 10V22M75.2 5V27M78.8 6V26M82.2 11V21M85.8 8V24M89.2 5V27M92.8 6V26M96.2 10V22M99.8 11V21M103.2 6V26M106.8 5V27M110.2 8V24M113.8 10V22"/></g><text class="t-h" x="30" y="106">修音前</text><text class="t-s" x="30" y="123">原录音配同一伴奏</text></g>
+<g class="node n-in" data-node="s2"><path class="frame" d="M20 150H146L155 159V246H20Z"/><text class="t-m" x="30" y="165">IN</text><rect class="win" x="30" y="170" width="115" height="32"/><g class="gl" transform="translate(30 170)"><path class="gs" d="M1.8 15V17M5.2 14V18M8.8 13V19M12.2 11V21M15.8 9V23M19.2 8V24M22.8 9V23M26.2 10V22M29.8 12V20M33.2 14V18M36.8 15V17M78.8 15V17M82.2 14V18M85.8 12V20M89.2 10V22M92.8 7V25M96.2 5V27M99.8 6V26M103.2 9V23M106.8 12V20M110.2 14V18M113.8 15V17"/><path class="gg" d="M40.2 14V18M43.8 12V20M47.2 9V23M50.8 6V26M54.2 4V28M57.8 3V29M61.2 5V27M64.8 7V25M68.2 9V23M71.8 11V21M75.2 13V19"/></g><text class="t-h" x="30" y="222">实时草稿</text><text class="t-s" x="30" y="239">缓存＋片段重算</text></g>
+<g class="node n-in" data-node="s3"><path class="frame" d="M20 292H146L155 301V388H20Z"/><text class="t-m" x="30" y="307">IN</text><rect class="win" x="30" y="312" width="115" height="32"/><g class="gl" transform="translate(30 312)"><path class="gs" d="M1.8 7V25M5.2 4V28M8.8 6V26M12.2 3V29M15.8 5V27M19.2 7V25M22.8 3V29M26.2 2V30M29.8 5V27M33.2 6V26M36.8 3V29M40.2 2V30M43.8 4V28M47.2 7V25M50.8 5V27M54.2 3V29M57.8 2V30M61.2 6V26M64.8 4V28M68.2 3V29M71.8 5V27M75.2 2V30M78.8 3V29M82.2 6V26M85.8 4V28M89.2 2V30M92.8 3V29M96.2 5V27M99.8 6V26M103.2 3V29M106.8 2V30"/><path class="gs" d="M111.5 3V29"/></g><text class="t-h" x="30" y="364">成品</text><text class="t-s" x="30" y="381">整曲完成后切换版本</text></g>
+<g class="node n-proc" data-node="sel"><path class="frame" d="M350 92H476L485 101V188H350Z"/><path class="bar-sig" d="M350 92H476V96H350Z"/><text class="t-m" x="360" y="107">01</text><rect class="win" x="360" y="112" width="115" height="32"/><g class="gl" transform="translate(360 112)"><path class="gt" d="M0 7H115M0 16H115M0 25H115"/><path class="gb" d="M6 5V9M9.5 4V10M13 5V9M16.5 4V10M6 23V27M9.5 22V28M13 23V27M16.5 22V28M20 23V27"/><path class="gs" d="M6 13V19M9.5 12V20M13 13V19M16.5 12V20M20 13V19M23.5 12V20"/><path class="gg" d="M70 2V30M66 1H74L70 6Z"/></g><text class="t-h" x="360" y="164">同一播放游标</text><text class="t-s" x="360" y="181">选一路音频</text></g>
+<g class="node n-proc" data-node="wv"><path class="frame" d="M680 34H806L815 43V130H680Z"/><path class="bar-sig" d="M680 34H806V38H680Z"/><text class="t-m" x="690" y="49">02</text><rect class="win" x="690" y="54" width="115" height="32"/><g class="gl" transform="translate(690 54)"><path class="gs" d="M1.8 15V17M5.2 14V18M8.8 13V19M12.2 11V21M15.8 9V23M19.2 8V24M22.8 9V23M26.2 10V22M29.8 12V20M33.2 14V18M36.8 15V17M40.2 14V18M43.8 12V20M47.2 9V23M50.8 6V26M54.2 4V28M57.8 3V29M61.2 5V27M64.8 7V25M68.2 9V23M71.8 11V21M75.2 13V19M78.8 15V17M82.2 14V18M85.8 12V20M89.2 10V22M92.8 7V25M96.2 5V27M99.8 6V26M103.2 9V23M106.8 12V20M110.2 14V18M113.8 15V17"/></g><text class="t-h" x="690" y="106">显示波形</text><text class="t-s" x="690" y="123">原电平</text></g>
+<g class="node n-proc" data-node="sc"><path class="frame" d="M680 150H806L815 159V246H680Z"/><path class="bar-sig" d="M680 150H806V154H680Z"/><text class="t-m" x="690" y="165">02</text><rect class="win" x="690" y="170" width="115" height="32"/><g class="gl" transform="translate(690 170)"><path class="gs" d="M4 14V18M7.5 13V19M11 14V18M14.5 13V19M18 14V18M21.5 13V19M25 14V18M28.5 13V19"/><path class="gg" d="M42 16H60M54 11L60 16L54 21"/><path class="gs" d="M66 11V21M69.5 8V24M73 10V22M76.5 7V25M80 11V21M83.5 8V24M87 10V22M90.5 7V25M94 11V21M97.5 8V24M101 10V22M104.5 7V25"/></g><text class="t-h" x="690" y="222">声卡播放</text><text class="t-s" x="690" y="239">可用等响增益</text></g>
+<g class="node n-out" data-node="wf"><path class="frame" d="M350 292H476L485 301V388H350Z"/><text class="t-m" x="360" y="307">03</text><rect class="win" x="360" y="312" width="115" height="32"/><g class="gl" transform="translate(360 312)"><path class="gs" d="M1.8 7V25M5.2 4V28M8.8 6V26M12.2 3V29M15.8 5V27M19.2 7V25M22.8 3V29M26.2 2V30M29.8 5V27M33.2 6V26M36.8 3V29M40.2 2V30M43.8 4V28M47.2 7V25M50.8 5V27M54.2 3V29M57.8 2V30M61.2 6V26M64.8 4V28M68.2 3V29M71.8 5V27M75.2 2V30M78.8 3V29M82.2 6V26M85.8 4V28M89.2 2V30M92.8 3V29M96.2 5V27M99.8 6V26M103.2 3V29M106.8 2V30"/><path class="gs" d="M111.5 3V29"/></g><text class="t-h" x="360" y="364">整曲 WAV</text><text class="t-s" x="360" y="381">按版本写盘</text></g>
+<g class="node n-out" data-node="rp"><path class="frame" d="M680 292H806L815 301V388H680Z"/><text class="t-m" x="690" y="307">03</text><rect class="win" x="690" y="312" width="115" height="32"/><g class="gl" transform="translate(690 312)"><path class="gs" d="M6 6H70M6 12H102M6 18H84M6 24H58"/></g><text class="t-h" x="690" y="364">处理报告</text><text class="t-s" x="690" y="381">JSON / HTML</text></g>
+<circle class="dot-ink" cx="155" cy="70" r="2.8"/>
+<circle class="dot-ink" cx="155" cy="186" r="2.8"/>
+<circle class="dot-ink" cx="155" cy="328" r="2.8"/>
+<circle class="dot-ink" cx="250" cy="328" r="2.8"/>
+<circle class="dot-sig" cx="485" cy="128" r="2.8"/>
+<circle class="dot-sig" cx="582" cy="128" r="2.8"/>
+<circle class="dot" cx="485" cy="328" r="2.8"/>
+<rect class="lt" x="851" y="176" width="74" height="20"/>
+<text class="t-s t-w" x="858" y="191">等响试听</text>
+<path class="ln ln-ctl" d="M851 186H819"/>
+<text class="t-s" x="520" y="320">成品测量</text>
+</svg>
+</div>
+      <dl class="io">
+        <div><dt>入 · IN</dt><dd>修音前、实时草稿、成品三路音频</dd></div>
+        <div><dt>变 · Δ</dt><dd>选一路送入同一播放游标；等响增益只作用于声卡输出</dd></div>
+        <div><dt>出 · OUT</dt><dd>声卡播放与波形显示；整曲 WAV、JSON／HTML 报告</dd></div>
+      </dl>
+    </div>
+    <figcaption>试听分支和写盘分支。报告汇总处理记录与音频测量，图中虚线表示成品测量流向报告。</figcaption>
+  </figure>
+  <div class="notes">
+    <p><strong>修音前。</strong>用原演唱和同一伴奏构造对照，做基础电平匹配和全局摆放，便于在同一时间位置比较处理效果。</p>
+    <p><strong>实时草稿。</strong>首次整曲处理后可复用分轨和分析缓存。调参时围绕播放位置重算片段，整曲母带增益用已完成版本近似。再次整曲生成，才得到新参数下完整的成品文件。</p>
+    <p><strong>等响与导出。</strong>「等响试听」默认关闭。打开时，响度匹配增益只作用于声卡输出，波形和写盘文件仍用各自原电平。单曲或批量整曲导出生成版本化 WAV 和 JSON／离线 HTML 报告。</p>
+  </div>
+</section>
+
+<aside class="closing" aria-labelledby="limits-heading">
+  <h2 id="limits-heading">什么时候应重点听前后对照</h2>
+  <ul class="notes">
+    <li><strong>漏唱、改词或即兴。</strong>字句可能缺少可靠对应。保护策略会保留部分原唱法，也可能因识别误差而选错参考。</li>
+    <li><strong>气声或极端音区。</strong>基频可能缺测或出现八度误判，导致修正旁路或听到局部音高变化。</li>
+    <li><strong>原曲版本或分离质量不同。</strong>段落、速度或伴奏变化会影响对齐。伴奏中的原唱残留也可能与演唱叠在一起。</li>
+  </ul>
+</aside>
+
+<section class="credits" id="credits" aria-labelledby="credits-heading">
+  <h2 id="credits-heading">引用的开源项目与作用</h2>
+  <p class="credits-lead">本页的处理都在本机运行，不上传录音。下面按处理顺序列出实际参与的开源项目。许可证以第三方组件说明为准，模型权重的授权与代码授权分开看。</p>
+  <div class="credit-groups">
+    <div class="credit-group">
+      <h3><span class="n">01</span>输入与分离</h3>
+      <ul>
+        <li><div class="credit-head"><a href="https://github.com/TRvlvr/model_repo">Kim Vocal 2</a><span class="lic">UVR / MDX 模型，权重授权见说明</span></div><p>勾选「含伴奏」时提取演唱人声，并把原曲分离成原唱和立体声伴奏。</p></li>
+        <li><div class="credit-head"><a href="https://ffmpeg.org/">FFmpeg</a><span class="lic">随包附许可证</span></div><p>修复明显的数字削波。母带前后的响度和真峰值测量，以及导出后回读 WAV，也用它。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/Rikorose/DeepFilterNet">DeepFilterNet3</a><span class="lic">代码 MIT / Apache-2.0，权重授权待上游确认</span></div><p>对干声做温和降噪。</p></li>
+      </ul>
+    </div>
+    <div class="credit-group">
+      <h3><span class="n">02</span>节奏对齐</h3>
+      <ul>
+        <li><div class="credit-head"><a href="https://github.com/wolfgitpr/HubertFA">HubertFA</a><span class="lic">Apache-2.0</span></div><p>中文歌声强制对齐，给出每个字及其韵母的起止时间，是字句线索的来源。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/openai/whisper">Whisper</a><span class="lic">MIT</span></div><p>在本机识别演唱和原唱的歌词文字，交给 HubertFA 做对齐。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/mozillazg/python-pinyin">pypinyin</a><span class="lic">MIT</span></div><p>把歌词转成拼音，用于音素匹配和同音字匹配。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/numba/numba">Numba</a><span class="lic">BSD-2-Clause</span></div><p>即时编译字序列匹配，找出演唱与原唱之间顺序一致的字。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/pytorch/pytorch">PyTorch</a><span class="lic">BSD 等</span></div><p>运行 Whisper 推理。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/Signalsmith-Audio/signalsmith-stretch">Signalsmith Stretch</a><span class="lic">MIT</span></div><p>按连续时间映射有限伸缩人声。第 03 节移动音高的也是它。</p></li>
+      </ul>
+    </div>
+    <div class="credit-group">
+      <h3><span class="n">03</span>音高修正</h3>
+      <ul>
+        <li><div class="credit-head"><a href="https://github.com/CNChTu/FCPE">FCPE</a><span class="lic">MIT</span></div><p>估计演唱和原唱的基频，按每秒 100 帧记录。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/scipy/scipy">SciPy</a> / <a href="https://github.com/numpy/numpy">NumPy</a><span class="lic">BSD</span></div><p>平滑音高控制曲线，对句内变时做约束拟合，并完成各处滤波和包络计算。</p></li>
+      </ul>
+    </div>
+    <div class="credit-group">
+      <h3><span class="n">04</span>混音与母带</h3>
+      <ul>
+        <li><div class="credit-head"><a href="https://github.com/spotify/pedalboard">Pedalboard</a><span class="lic">GPL-3.0</span></div><p>提供混响和高低架均衡，并作为 ZL 插件的宿主。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/ZL-Audio/ZLCompressor">ZL Compressor</a><span class="lic">AGPL-3.0</span></div><p>「混音」推子对应的光学压缩密度，分频段处理。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/ZL-Audio/ZLLimiter">ZL Limiter</a><span class="lic">AGPL-3.0</span></div><p>C+ 母带的真峰值限幅。</p></li>
+      </ul>
+    </div>
+    <div class="credit-group">
+      <h3><span class="n">05</span>试听与导出</h3>
+      <ul>
+        <li><div class="credit-head"><a href="https://github.com/spatialaudio/python-sounddevice">sounddevice</a> / <a href="https://github.com/PortAudio/portaudio">PortAudio</a><span class="lic">MIT</span></div><p>本地播放，三种来源共用同一个播放位置。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/bastibe/python-soundfile">SoundFile</a><span class="lic">BSD，内含 libsndfile（LGPL）</span></div><p>读写试听轨和成品 WAV。</p></li>
+      </ul>
+    </div>
+    <div class="credit-group">
+      <h3><span class="n">·</span>运行基础</h3>
+      <ul>
+        <li><div class="credit-head"><a href="https://github.com/microsoft/onnxruntime">ONNX Runtime</a><span class="lic">MIT</span></div><p>在本机运行 FCPE、HubertFA 和 Kim Vocal 2 的模型。</p></li>
+        <li><div class="credit-head"><a href="https://code.qt.io/cgit/qt/qtwebengine.git/">PySide6 / Qt WebEngine</a><span class="lic">LGPL-3.0 / GPL 选项</span></div><p>桌面界面由 Qt WebEngine 渲染。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/pyinstaller/pyinstaller">PyInstaller</a><span class="lic">GPL，含 bootloader 例外</span></div><p>打包成独立桌面程序。</p></li>
+      </ul>
+    </div>
+    <div class="credit-group">
+      <h3><span class="n">·</span>未进入默认处理链</h3>
+      <ul>
+        <li><div class="credit-head"><a href="https://github.com/meinardmueller/synctoolbox">Sync Toolbox</a><span class="lic">MIT</span></div><p>声学候选对齐路径，只用于非中文的旧路径，桌面默认的中文路径不经过它。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/YannickJadoul/Parselmouth">Parselmouth（Praat）</a><span class="lic">GPL-3.0</span></div><p>TD-PSOLA 对照实验与测量。</p></li>
+        <li><div class="credit-head"><a href="https://breakfastquay.com/rubberband/">Rubber Band</a><span class="lic">GPL-2.0-or-later</span></div><p>历史自然度对照工具。</p></li>
+        <li><div class="credit-head"><a href="https://github.com/openvpi/vocoders/releases/tag/pc-nsf-hifigan-44.1k-hop512-128bin-2025.02">PC-NSF-HiFiGAN</a><span class="lic">CC BY-NC-SA 4.0，非商业</span></div><p>声码器实验对照。桌面默认渲染器是 Signalsmith。</p></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p>图中的波形、时间轴和音高曲线用于解释原理。每次处理的实际数据见该次导出的报告。</p>
+  <p>源码索引包括 <a href="../src/shadowvox/pipeline.py">处理主链</a>、<a href="../src/shadowvox/full_align.py">节奏规划</a>、<a href="../src/shadowvox/register.py">音高规划</a>、<a href="../src/shadowvox/signalsmith.py">Signalsmith 渲染</a>、<a href="../src/shadowvox/mastering.py">母带处理</a>、<a href="../src/shadowvox/live_preview.py">草稿试听</a>和<a href="../src/shadowvox/jobs.py">桌面导出</a>。模型与许可证见<a href="../THIRD_PARTY.txt">第三方组件说明</a>。</p>
+</footer>
 </main>
+</body>
 </html>
