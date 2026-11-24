@@ -55,7 +55,8 @@ def options_from(p):
         mix_compression=p['mix_compression']/100, mix_deess=p['mix_deess']/100, mix_harmonics=harmonics,
         mix_reverb=p['mix_reverb']/100, mix_delay=p['mix_delay']/100, mix_duck=p['mix_duck']/100,
         fixed_master=True, target_lufs=TARGET_LUFS, true_peak_ceiling=TRUE_PEAK_CEILING, master_density=density,
-        dry_has_backing=bool(p.get('dry_has_backing')), mute_reference_gaps=mute_gaps)
+        dry_has_backing=bool(p.get('dry_has_backing')), mute_reference_gaps=mute_gaps,
+        mix_profile={'adaptive_eq': True, 'ms_duck': True, 'perceptual_balance': True})
 
 
 def next_version(folder, stem):

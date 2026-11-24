@@ -236,8 +236,8 @@ class HubertTests(unittest.TestCase):
             pairs = np.array([[1.03,1.08,1.03+offset,1.10+offset]])
             plan = dict(windows=[],dry_seconds=2.,ref_seconds=3.,offset=offset,pitch_pairs=pairs)
             pieces,stats = hfa.plan_segments(plan,.5)
-            placement = max(0.,offset*.5)
-            self.assertAlmostEqual(stats['median_offset_seconds'],offset*.5)
+            placement = max(0.,offset)
+            self.assertAlmostEqual(stats['median_offset_seconds'],offset)
             x = np.arange(200,dtype=np.float32)
             rendered,_ = render_segments(x,pieces,100)
             origin = round(placement*100)
@@ -248,7 +248,39 @@ class HubertTests(unittest.TestCase):
             self.assertTrue(valid[frame])
             self.assertFalse(valid[origin+102])
             self.assertFalse(valid[origin+109])
-            self.assertAlmostEqual(times[frame],1.03+offset+.028+max(0.,-offset*.5))
+            self.assertAlmostEqual(times[frame],1.03+offset+.028+max(0.,-offset))
+
+    def test_partial_strength_keeps_full_global_offset_and_zero_strength_keeps_position(self):
+        for offset in (1.35, -1.06):
+            with self.subTest(offset=offset):
+                source = np.array([1.0, 2.0, 3.0, 4.0])
+                # 中间两锚点相对全局 offset 分别晚 0.06s、早 0.04s（reference 已减去 offset）
+                reference = source + np.array([0., -.06, .04, 0.])
+                pairs = np.array([[2.0, 2.2, 2.0 + offset - .06, 2.2 + offset - .06]])
+                plan = dict(windows=[dict(source=source, reference=reference)],
+                            dry_seconds=5., ref_seconds=7., offset=offset, pitch_pairs=pairs)
+                pieces_full, stats_full = hfa.plan_segments(plan, strength=1.0, max_rate=.16)
+                pieces_part, stats_part = hfa.plan_segments(plan, strength=.92, max_rate=.16)
+                self.assertAlmostEqual(stats_part['median_offset_seconds'], offset)
+                self.assertAlmostEqual(stats_part['global_offset_seconds'], offset)
+                self.assertAlmostEqual(stats_part['reference_shift_seconds'], max(0., -offset))
+                # 局部变时量应按 0.92 缩放，而非叠加 -8% 的全局偏移残差
+                src_full = np.concatenate([p['source'][:-1] for p in pieces_full] + [pieces_full[-1]['source'][-1:]])
+                dst_full = np.concatenate([p['target'][:-1] for p in pieces_full] + [pieces_full[-1]['target'][-1:]])
+                src_part = np.concatenate([p['source'][:-1] for p in pieces_part] + [pieces_part[-1]['source'][-1:]])
+                dst_part = np.concatenate([p['target'][:-1] for p in pieces_part] + [pieces_part[-1]['target'][-1:]])
+                base = max(0., offset)
+                local_full = np.interp([2.0, 3.0], src_full, dst_full) - np.array([2.0, 3.0]) - base
+                local_part = np.interp([2.0, 3.0], src_part, dst_part) - np.array([2.0, 3.0]) - base
+                np.testing.assert_allclose(local_part, local_full * .92, atol=1e-6)
+                # 关闭节奏（strength=0）时保持原位，不移动音频，但仍保留音高对应
+                pieces_zero, stats_zero = hfa.plan_segments(plan, strength=0., max_rate=.16)
+                self.assertAlmostEqual(stats_zero['median_offset_seconds'], 0.)
+                self.assertAlmostEqual(stats_zero['reference_shift_seconds'], 0.)
+                self.assertFalse(stats_zero['applied'])
+                times, valid = pitch_mapping(pieces_zero, plan, 500)
+                self.assertTrue(valid[210])
+                self.assertAlmostEqual(times[210], 2.1 + offset - .06)
 
     def test_continuous_warp_renders_once_and_preview_uses_same_waveform(self):
         x=np.arange(200,dtype=np.float32)

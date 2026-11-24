@@ -58,6 +58,8 @@ class Options:
     large_note_limit_cents: float | None = None
     genre_preset: str = ''
     mix_profile: dict | None = None
+    auto_key_shift: bool = True     # 自动检测干声与原曲整半音异调并同步移调伴奏与参考音高
+    partial_fadeout: bool = True    # 干声仅演唱前半段时，在末尾预留缓冲并平滑淡出整曲
 
 
 def _detect_octave(dry_f0, ref_f0, move_seconds):
@@ -311,6 +313,22 @@ def run(dry_path, song_path=None, out_path=None, work_dir=None, opts=None, log=p
         dry_f0 = fcpe.extract(dry, C.VOC_SR)
         reference_times, reference_valid = pitch_mapping(rhythm_pieces,
             alignment_capture['rhythm_plan'], len(dry_f0), C.F0_FRAME_RATE)
+        key_shift_info = {"applied": False, "semitones": 0}
+        if opts.auto_key_shift:
+            from .key_shift import detect_key_shift, transpose_audio, transpose_f0
+            key_shift_info = detect_key_shift(
+                dry_f0, ref_f0, reference_times=reference_times,
+                reference_valid=reference_valid, fps=C.F0_FRAME_RATE)
+            if key_shift_info["applied"]:
+                semi = key_shift_info["semitones"]
+                log(f"[调性] 检测到干声相对原曲偏移 {semi:+d} 半音，自动移调伴奏与参考音高"
+                    f"（偏差 {key_shift_info['before_error_cents']:.0f} → {key_shift_info['after_error_cents']:.0f} 音分）")
+                ref_f0 = transpose_f0(ref_f0, semi)
+                if inst is not None:
+                    inst = transpose_audio(inst, C.VOC_SR, semi)
+                    if capture is not None:
+                        capture['inst_original'] = inst.copy()
+        report["key_shift"] = key_shift_info
         from .align import augment_pitch_correspondence
         reference_times, reference_valid, acoustic_added = augment_pitch_correspondence(
             dry_f0, ref_f0, reference_times, reference_valid, fps=C.F0_FRAME_RATE)
@@ -334,6 +352,21 @@ def run(dry_path, song_path=None, out_path=None, work_dir=None, opts=None, log=p
             if onset_offset is None:
                 onset_offset = rhythm.onset_offset(dry_f0, ref_f0)
             report["rhythm"]["offset_after_seconds"] = round(onset_offset, 4)
+    if "key_shift" not in report:
+        key_shift_info = {"applied": False, "semitones": 0}
+        if opts.auto_key_shift:
+            from .key_shift import detect_key_shift, transpose_audio, transpose_f0
+            key_shift_info = detect_key_shift(
+                dry_f0, ref_f0, offset_seconds=onset_offset or 0.0, fps=C.F0_FRAME_RATE)
+            if key_shift_info["applied"]:
+                semi = key_shift_info["semitones"]
+                log(f"[调性] 检测到干声相对原曲偏移 {semi:+d} 半音，自动移调伴奏与参考音高")
+                ref_f0 = transpose_f0(ref_f0, semi)
+                if inst is not None:
+                    inst = transpose_audio(inst, C.VOC_SR, semi)
+                    if capture is not None:
+                        capture['inst_original'] = inst.copy()
+        report["key_shift"] = key_shift_info
     report["dry_seconds_after_rhythm"] = round(len(dry) / C.VOC_SR, 2)
     if capture is not None:
         capture['aligned_dry'] = dry.copy()
@@ -462,6 +495,17 @@ def run(dry_path, song_path=None, out_path=None, work_dir=None, opts=None, log=p
         trimmed = (len(placed) - song_len) / C.VOC_SR
         placed = placed[:song_len]
         report["vocal_trimmed_seconds"] = round(trimmed, 2)
+
+    fade_plan = {"applied": False}
+    if opts.partial_fadeout and inst is not None:
+        from .ending import plan_partial_fadeout, apply_fadeout
+        fade_plan = plan_partial_fadeout(placed, ref_vocal, C.VOC_SR)
+        if fade_plan["applied"]:
+            log(f"[淡出] 干声唱至 {fade_plan['last_vocal_seconds']:.1f}s（原唱至 {fade_plan['ref_last_vocal_seconds']:.1f}s），"
+                f"保留 {fade_plan['buffer_seconds']:.1f}s 缓冲后平滑淡出至 {fade_plan['end_seconds']:.1f}s")
+    report["partial_fadeout"] = {k: v for k, v in fade_plan.items() if k != "end_samples"}
+    trim_samples = fade_plan["end_samples"] if fade_plan["applied"] else None
+
     if capture is not None:
         capture.update(inst=inst.copy() if inst is not None else None, vocal=placed.copy(),
                        reference=ref_vocal.copy(), move=move, ref_voiced_rms=ref_voiced_rms,
@@ -471,13 +515,25 @@ def run(dry_path, song_path=None, out_path=None, work_dir=None, opts=None, log=p
 
     vocal_path = out_path.with_name(out_path.stem + "_vocal.wav")
     vocal_path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(vocal_path, placed, C.VOC_SR, subtype='FLOAT')
+    vocal_out = placed
+    if trim_samples is not None:
+        from .ending import apply_fadeout
+        vocal_out = apply_fadeout(placed[:trim_samples], C.VOC_SR, fade_plan["fade_seconds"])
+        if capture is not None:
+            capture['vocal'] = vocal_out.copy()
+            if capture.get('inst_original') is not None:
+                capture['inst_original'] = apply_fadeout(
+                    capture['inst_original'][:, :trim_samples], C.VOC_SR, fade_plan["fade_seconds"])
+    sf.write(vocal_path, vocal_out, C.VOC_SR, subtype='FLOAT')
 
     if opts.comparison and inst is not None:
         original = audio.match_rms(original_dry, ref_voiced_rms)
         original *= 10 ** (opts.vocal_gain_db / 20.0)
         original = _place(original, move if before_move is None else before_move, song_len, C.VOC_SR)
         before = inst[:, :song_len] + original[None, :]
+        if trim_samples is not None:
+            from .ending import apply_fadeout
+            before = apply_fadeout(before[:, :trim_samples], C.VOC_SR, fade_plan["fade_seconds"])
         before *= min(1., 10**(-1.5/20) / max(audio.peak(before), 1e-9))
         before_path = out_path.with_name(out_path.stem + '_before.wav')
         audio.save(before_path, before, C.VOC_SR)
@@ -495,18 +551,28 @@ def run(dry_path, song_path=None, out_path=None, work_dir=None, opts=None, log=p
                 deessing=opts.mix_deess,harmonics=opts.mix_harmonics,reverb=opts.mix_reverb,
                 delay_amount=opts.mix_delay,duck=opts.mix_duck,
                 reference_vocal=ref_vocal[:n_mix],vocal_gain_db=opts.vocal_gain_db,capture=capture,
-                capture_vocal_mix=capture_vocal_mix,profile=opts.mix_profile)
+                capture_vocal_mix=capture_vocal_mix,profile=opts.mix_profile,vocal_f0=corr_f0)
             report["mixing"] = effect_stats
         else:
             mixed = inst[:, :n_mix] + stereo[:, :n_mix]
             if capture is not None and capture_vocal_mix:
                 capture['vocal_mix'] = stereo[:, :n_mix]
             report["mixing"] = {"enabled":False}
+        if trim_samples is not None:
+            from .ending import apply_fadeout
+            end_n = min(trim_samples, mixed.shape[1])
+            mixed = mixed[:, :end_n]
+            if capture is not None and capture_vocal_mix and 'vocal_mix' in capture:
+                capture['vocal_mix'] = apply_fadeout(
+                    capture['vocal_mix'][:, :end_n], C.VOC_SR, fade_plan["fade_seconds"])
         if opts.fixed_master:
             from .mastering import finalize, write_output
             log("[母带] C+ 响度校准与真峰值限幅")
             mixed, master_stats = finalize(mixed, C.VOC_SR, (opts.master_density or 0.) if opts.mix_effects else 0.,
                                            target_lufs=opts.target_lufs, true_peak_ceiling=opts.true_peak_ceiling)
+            if trim_samples is not None:
+                from .ending import apply_fadeout
+                mixed = apply_fadeout(mixed, C.VOC_SR, fade_plan["fade_seconds"])
             write_output(out_path, mixed, C.VOC_SR, master_stats, true_peak_ceiling=opts.true_peak_ceiling)
             report['mixing'].update(master_stats)
         else:
@@ -516,6 +582,9 @@ def run(dry_path, song_path=None, out_path=None, work_dir=None, opts=None, log=p
                                              true_peak_ceiling=opts.true_peak_ceiling,apply_glue=True,
                                              density=opts.master_density)
                 report['mixing'].update(master_stats)
+            if trim_samples is not None:
+                from .ending import apply_fadeout
+                mixed = apply_fadeout(mixed, C.VOC_SR, fade_plan["fade_seconds"])
             pk = audio.peak(mixed)
             ceiling = 10 ** (-1.0 / 20.0)
             if pk > ceiling:

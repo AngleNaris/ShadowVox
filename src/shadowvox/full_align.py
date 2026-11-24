@@ -358,22 +358,41 @@ def _render_phrase_timeline(dry, pieces, sr, start, end, checkpoint):
             y = _render_pause(x, want, sr)
             out[a-start:b-start] = y[a-dst[0]:b-dst[0]]
             continue
-        same_rate = np.max(abs((source-source[0])-(target-target[0]))) < 1e-7
+        same_rate = want == len(x) and np.max(abs((source-source[0])-(target-target[0]))) < 1e-7
         y = x.copy() if same_rate else stretch(x,(src-src[0])/sr,(dst-dst[0])/sr,sr,checkpoint=checkpoint)
         if not same_rate:
-            fade = min(round(sr*FADE_SECONDS),len(y)//2,len(x)//2)
-            opposed = fade and any(np.dot(u.astype(float),v.astype(float)) < 0
-                                   for u,v in ((x[:fade],y[:fade]),(x[-fade:],y[-fade:])))
-            if abs(len(y)-want) > 2 or opposed:
+            if abs(len(y)-want) > 2:
                 y = x.copy()
-                for piece in group:
-                    piece['target'] = piece['source']+(target[0]-source[0])
-                    piece['protected'] = abs(piece['phrase_move']) < 1e-7
-                group[0]['render_fallback'] = 'opposed_boundary_phase' if opposed else 'phrase_render_length'
-            elif fade:
-                weight = np.linspace(0.,1.,fade,dtype=np.float32)
-                y[:fade] = x[:fade]*(1-weight)+y[:fade]*weight
-                y[-fade:] = x[-fade:]*weight+y[-fade:]*(1-weight)
+                if want == len(x):
+                    for piece in group:
+                        piece['target'] = piece['source']+(target[0]-source[0])
+                        piece['protected'] = abs(piece['phrase_move']) < 1e-7
+                group[0]['render_fallback'] = 'phrase_render_length'
+            else:
+                fade = min(round(sr*FADE_SECONDS),len(y)//2,len(x)//2)
+                if fade and want == len(x):
+                    weight = np.linspace(0.,1.,fade,dtype=np.float32)
+                    # 相位一致时做 30ms 平滑融合；STFT 变速后端点相位旋转时改为 4ms 静音边消咔哒，不再丢弃有效对齐。
+                    if np.dot(x[:fade].astype(float),y[:fade].astype(float)) >= 0:
+                        y[:fade] = x[:fade]*(1-weight)+y[:fade]*weight
+                    else:
+                        edge = min(round(sr*.004),fade)
+                        if edge >= 2:
+                            ew = np.linspace(0.,1.,edge,dtype=np.float32)
+                            y[:edge] = x[:edge]*(1-ew)+y[:edge]*ew
+                    if np.dot(x[-fade:].astype(float),y[-fade:].astype(float)) >= 0:
+                        y[-fade:] = x[-fade:]*weight+y[-fade:]*(1-weight)
+                    else:
+                        edge = min(round(sr*.004),fade)
+                        if edge >= 2:
+                            ew = np.linspace(0.,1.,edge,dtype=np.float32)
+                            y[-edge:] = x[-edge:]*ew+y[-edge:]*(1-ew)
+                elif fade:
+                    edge = min(round(sr*.004),fade)
+                    if edge >= 2:
+                        ew = np.linspace(0.,1.,edge,dtype=np.float32)
+                        y[:edge] = x[:edge]*(1-ew)+y[:edge]*ew
+                        y[-edge:] = x[-edge:]*ew+y[-edge:]*(1-ew)
         y = np.pad(y[:want],(0,max(0,want-len(y))),mode='edge')
         out[a-start:b-start] = y[a-dst[0]:b-dst[0]]
     return out,[(float(p['target'][0]),float(p['target'][-1])) for p in pieces if p['protected']]
@@ -388,11 +407,13 @@ def render_segments(dry, pieces, sr, start=0, end=None, *, checkpoint=None):
         source = np.concatenate([p['source'][:-1] for p in pieces]+[pieces[-1]['source'][-1:]])
         target = np.concatenate([p['target'][:-1] for p in pieces]+[pieces[-1]['target'][-1:]])
         origin = round(target[0]*sr)
-        target -= target[0]
-        rendered = dry.copy() if np.max(abs(target-source)) < 1e-7 else stretch(dry,source,target,sr,checkpoint=checkpoint)
-        if abs(len(rendered)-len(dry)) > 2:
+        target = target - target[0]
+        want = round(target[-1]*sr)
+        same_grid = want == len(dry) and np.max(abs(target-source)) < 1e-7
+        rendered = dry.copy() if same_grid else stretch(dry,source,target,sr,checkpoint=checkpoint)
+        if abs(len(rendered)-want) > 2:
             raise RuntimeError('中文对齐输出长度不符，已停止导出')
-        rendered = np.pad(rendered,(0,max(0,len(dry)-len(rendered))),mode='edge')[:len(dry)]
+        rendered = np.pad(rendered,(0,max(0,want-len(rendered))),mode='edge')[:want]
         out = np.zeros(end-start,dtype=np.float32)
         lo,hi = max(origin,start),min(end,origin+len(rendered))
         if hi > lo: out[lo-start:hi-start] = rendered[lo-origin:hi-origin]

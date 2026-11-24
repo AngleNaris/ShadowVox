@@ -57,14 +57,17 @@ class SelectedMixTests(unittest.TestCase):
         dry, _ = mixing.enhance(voice, bed, self.sr, space=0, duck=0)
         wet, info = mixing.enhance(voice, bed, self.sr, delay_amount=0, duck=0)
         y = dry[0]
-        env = mixing.envelope(y,self.sr,attack=.025,release=.25)
-        activity = np.clip((20*np.log10(np.maximum(env,1e-8))+33)/18,0,1)
-        wet_gain = 10**(-3.8*activity/20)
-        reference = mixing.room(y,self.sr,size=.66)*10**((mixing.LONG_ROOM_RETURN_DB-3)/20)*wet_gain
-        result = wet-dry-mixing.short_room(y,self.sr)
+        wet_gain, short_gain = mixing._reverb_duck_gains(y, self.sr, 7.5, attack_s=.010, release_s=.14, short_share=.35)
+        reference = mixing.room(y,self.sr,size=.66,predelay_ms=22.)*10**((mixing.LONG_ROOM_RETURN_DB-3)/20)*wet_gain
+        result = wet-dry-mixing.short_room(y,self.sr)*.75*short_gain
         np.testing.assert_allclose(result, reference*10**(3/20), atol=5e-7)
         tail = slice(round(1.4*self.sr),round(1.8*self.sr))
         self.assertGreater(audio.rms(result[:,tail]),1.4*audio.rms(reference[:,tail]))
+        # 咬字期间湿声被明显压低，句尾停止发声后长尾清晰浮现
+        mid_word = slice(round(.25*self.sr), round(.85*self.sr))
+        phrase_end = slice(round(1.15*self.sr), round(1.55*self.sr))
+        self.assertLess(float(np.mean(wet_gain[mid_word])), .50)
+        self.assertGreater(float(np.mean(wet_gain[phrase_end])), .85)
         self.assertEqual(info['reverb_room_size'],.66)
         self.assertEqual(info['reverb_tail_boost_db'],3.)
         self.assertEqual(info['mix_preset'], mixing.MIX_PRESET)

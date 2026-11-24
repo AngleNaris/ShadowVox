@@ -110,6 +110,9 @@ def summary_rows(report, metrics):
         rhythm_text = '关闭局部节奏匹配'
     elif rhythm:
         rhythm_text = f"保护 {_value(rhythm.get('protected_seconds'), ' 秒')}；延长 {_value(rhythm.get('extra_duration_seconds', 0), ' 秒')}"
+        scale = rhythm.get('global_tempo_scale')
+        if scale is not None and abs(float(scale) - 1.0) >= 5e-4:
+            rhythm_text += f"；速度适配 {(float(scale) - 1.0) * 100:+.2f}%"
     else:
         rhythm_text = '未得到节奏统计'
     rows = [
@@ -123,6 +126,18 @@ def summary_rows(report, metrics):
         ('削波修复', '已应用' if declip.get('applied') else ('关闭' if declip.get('disabled') else '未检测到明显削波')),
         ('处理时间', _value(report.get('elapsed_seconds'), ' 秒')),
     ]
+    if (ks := report.get('key_shift')) and ks.get('applied'):
+        rows.append(('自动调性适配', f"伴奏与参考自动移调 {ks['semitones']:+d} 半音（偏差 {ks['before_error_cents']:.0f} → {ks['after_error_cents']:.0f} 音分）"))
+    if (pf := report.get('partial_fadeout')) and pf.get('applied'):
+        rows.append(('半曲末尾淡出', f"唱至 {pf['last_vocal_seconds']:.1f}s，缓冲 {pf['buffer_seconds']:.1f}s 后淡出至 {pf['end_seconds']:.1f}s（原曲 {pf['original_song_seconds']:.1f}s）"))
+    mixing_info = report.get('mixing') or {}
+    if (adp := mixing_info.get('adaptive_eq')) and adp.get('adaptive_bells'):
+        bells_txt = ' · '.join(f"{hz:.0f}Hz {g:+.1f}dB" for hz, g, *_ in adp['adaptive_bells'])
+        rows.append(('自适应声谱校正', bells_txt))
+    if (msd := mixing_info.get('ms_duck')) and msd.get('enabled'):
+        rows.append(('M/S 伴奏避让',
+                     f"Mid 清晰 {msd['mid_pres_duck_db']:.1f} dB / 声体 {msd['mid_body_duck_db']:.1f} dB"
+                     f"（{msd['body_band_hz'][0]:.0f}–{msd['body_band_hz'][1]:.0f} Hz）"))
     if lyrics := report.get('lyrics'):
         rows.append(('LRC 歌词', lyrics['detail']))
     separation = report.get('dry_separation')

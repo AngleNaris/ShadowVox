@@ -252,7 +252,8 @@ class PreviewCache:
                 lowcut_hz=opts.mix_lowcut_hz, eq=opts.mix_eq, compression=opts.mix_compression,
                 deessing=opts.mix_deess, harmonics=opts.mix_harmonics, reverb=opts.mix_reverb, delay_amount=opts.mix_delay,
                 duck=opts.mix_duck, reference_vocal=reference,
-                vocal_gain_db=opts.vocal_gain_db, gain_db=gain_db, profile=opts.mix_profile)
+                vocal_gain_db=opts.vocal_gain_db, gain_db=gain_db, profile=opts.mix_profile,
+                vocal_diagnosis=self.data.get('vocal_diagnosis'))
             check()
             if opts.fixed_master:
                 if opts.master_density and baseline.get('input_lufs') is not None:

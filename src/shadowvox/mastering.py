@@ -15,7 +15,7 @@ from .vst_worker import render_isolated
 
 TARGET_LUFS = -8.0
 TRUE_PEAK_CEILING = -1.0
-MAX_MEDIAN_REDUCTION_DB = 3.2
+MAX_MEDIAN_REDUCTION_DB = 2.0
 LOUDNESS_TOLERANCE = .15
 LIMITER = C.ROOT/'plugins/ZL Limiter.vst3/Contents/x86_64-win/ZL Limiter.vst3'
 

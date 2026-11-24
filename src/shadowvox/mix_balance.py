@@ -3,7 +3,10 @@ import numpy as np
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 
 
-def _levels(signal, indices, window):
+def _levels(signal, indices, window, sr=None, perceptual=False):
+    if perceptual and sr is not None:
+        from .mixing import k_weight
+        signal = k_weight(signal, sr)
     power = np.square(signal, dtype=np.float64)
     if power.ndim == 2:
         power = np.mean(power, axis=0)
@@ -20,7 +23,8 @@ def _limit_rate(values, times, maximum=.2):
     return result
 
 
-def curve(dry, baseline, bed, reference, original_bed, sr, original_dry=None):
+def curve(dry, baseline, bed, reference, original_bed, sr, original_dry=None,
+          perceptual=False, max_boost_db=2.0):
     """Return one smooth dB curve; calculate each singer's active levels independently."""
     n = len(dry)
     hop = max(1, round(.05 * sr))
@@ -28,11 +32,13 @@ def curve(dry, baseline, bed, reference, original_bed, sr, original_dry=None):
     times = indices / sr
     step = hop / sr
 
-    dry_short = _levels(dry, indices, max(1, round(.4 * sr)))
-    vocal_short = _levels(baseline, indices, max(1, round(.4 * sr)))
-    bed_short = _levels(bed, indices, max(1, round(.4 * sr)))
+    dry_short = _levels(dry, indices, max(1, round(.4 * sr)), sr, perceptual=perceptual)
+    vocal_short = _levels(baseline, indices, max(1, round(.4 * sr)), sr, perceptual=perceptual)
+    bed_short = _levels(bed, indices, max(1, round(.4 * sr)), sr, perceptual=perceptual)
     ratio = vocal_short - bed_short
-    active = (dry_short > -29) & (bed_short > -45)
+    short_gate = -31 if perceptual else -29
+    act_offset = 37 if perceptual else 35
+    active = (dry_short > short_gate) & (bed_short > -45)
     target = np.empty(len(indices))
     if active.any():
         fallback = float(np.median(ratio[active]))
@@ -41,43 +47,61 @@ def curve(dry, baseline, bed, reference, original_bed, sr, original_dry=None):
             a, b = max(0, i-radius), min(len(indices), i+radius+1)
             local = ratio[a:b][active[a:b]]
             target[i] = np.median(local) if len(local) >= 10 else fallback
-        activity = np.clip((dry_short + 35) / 6, 0, 1)
-        rider = np.clip((target - ratio) * .55, -1.5, 1.5) * activity
-        rider = gaussian_filter1d(rider, sigma=.6 / step, mode="nearest")
+        activity = np.clip((dry_short + act_offset) / 6, 0, 1)
+        if perceptual:
+            rider = np.clip((target - ratio) * .55, -1.5, 1.5) * activity
+            rider = gaussian_filter1d(rider, sigma=.5 / step, mode="nearest")
+        else:
+            rider = np.clip((target - ratio) * .55, -1.5, 1.5) * activity
+            rider = gaussian_filter1d(rider, sigma=.6 / step, mode="nearest")
     else:
         rider = np.zeros(len(indices))
 
     window = max(1, round(sr))
     reference = np.pad(reference[:n], (0, max(0, n-len(reference))))
-    ref = _levels(reference, indices, window)
-    ref_bed = _levels(original_bed, indices, window)
-    dry_db = _levels(dry if original_dry is None else original_dry, indices, window)
+    ref = _levels(reference, indices, window, sr, perceptual=perceptual)
+    ref_bed = _levels(original_bed, indices, window, sr, perceptual=perceptual)
+    dry_db = _levels(dry if original_dry is None else original_dry, indices, window, sr, perceptual=perceptual)
     rider_samples = 10 ** (np.interp(np.arange(n), indices, rider) / 20)
-    vocal_db = _levels(baseline * rider_samples, indices, window)
-    bed_db = _levels(bed, indices, window)
-    ref_active = (ref > -32) & (ref_bed > -45)
-    cover_active = (dry_db > -32) & (bed_db > -45)
+    vocal_db = _levels(baseline * rider_samples, indices, window, sr, perceptual=perceptual)
+    bed_db = _levels(bed, indices, window, sr, perceptual=perceptual)
+    long_gate = -34 if perceptual else -32
+    ref_active = (ref > long_gate) & (ref_bed > -45)
+    cover_active = (dry_db > long_gate) & (bed_db > -45)
     centres = np.arange(0, times[-1] + 2., 2.)
     anchors = np.full(len(centres), np.nan)
     required = round(2 / step)
+    strength = .72 if perceptual else .7
     for i, centre in enumerate(centres):
         region = (times >= centre-6) & (times < centre+6)
         a, b = region & ref_active, region & cover_active
         if np.count_nonzero(a) >= required and np.count_nonzero(b) >= required:
             original_ratio = np.median((ref-ref_bed)[a])
             cover_ratio = np.median((vocal_db-bed_db)[b])
-            anchors[i] = np.clip(-.5 * (cover_ratio-original_ratio), -1.5, 1.5)
+            anchors[i] = np.clip(-strength * (cover_ratio-original_ratio), -3.0, max_boost_db)
     valid = np.isfinite(anchors)
+    ref_rate = 0.45 if perceptual else 0.2
+    combined_rate = 0.65 if perceptual else 0.2
+    combined_sigma = 0.85 if perceptual else 1.5
     if valid.any():
         reference_gain = np.interp(times, centres[valid], anchors[valid])
-        reference_gain = _limit_rate(gaussian_filter1d(reference_gain, sigma=3/step, mode="nearest"), times)
+        reference_gain = _limit_rate(
+            gaussian_filter1d(reference_gain, sigma=(2.0 if perceptual else 3.0)/step, mode="nearest"),
+            times, maximum=ref_rate,
+        )
     else:
         reference_gain = np.zeros(len(times))
-    combined = _limit_rate(gaussian_filter1d(reference_gain+rider, sigma=1.5/step, mode="nearest"), times)
+    raw_combined = np.clip(reference_gain + rider, -3.0, max_boost_db) if perceptual else (reference_gain + rider)
+    combined = _limit_rate(
+        gaussian_filter1d(raw_combined, sigma=combined_sigma/step, mode="nearest"),
+        times, maximum=combined_rate,
+    )
     return times, combined, {
         "reference_used": bool(valid.any()), "reference_sections": int(valid.sum()),
-        "window_seconds": 12, "step_seconds": 2, "strength": .5,
-        "reference_limit_db": 1.5, "max_rate_db_per_second": .2,
+        "window_seconds": 12, "step_seconds": 2, "strength": strength,
+        "perceptual_weighting": bool(perceptual),
+        "reference_limit_db": 3.0, "max_boost_db": float(max_boost_db),
+        "max_rate_db_per_second": combined_rate,
         "gain_min_db": round(float(combined.min()), 3),
         "gain_max_db": round(float(combined.max()), 3),
     }

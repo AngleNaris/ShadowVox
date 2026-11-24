@@ -61,46 +61,283 @@ def onset_offset(dry_f0, ref_f0, max_lag=1.5):
     return -(lags[k] + frac) / FPS
 
 
+def _key_invariant_pitch_error(dry_f0, ref_f0, shift_frames, min_frames=120):
+    """移调无关的音高一致性评估：将 dry[j] 与 ref[j + shift_frames] 对比。
+
+    自动搜索最优半音移调 k ∈ [-5, +6]，返回 (中位音分误差, 120音分内占比, 最优半音, 共同有声帧数)。
+    既兼容同调演唱，也能在 KTV 升降调 / 男女异调翻唱时准确辨别真实对齐位置。
+    """
+    from .f0 import cent
+
+    nd, nr = len(dry_f0), len(ref_f0)
+    idx = np.arange(nd, dtype=np.int64) + int(shift_frames)
+    ok = (idx >= 0) & (idx < nr) & (dry_f0 > 0)
+    if int(ok.sum()) < min_frames:
+        return np.inf, 0.0, 0, int(ok.sum())
+    rv = ref_f0[np.clip(idx, 0, nr - 1)]
+    m = ok & (rv > 0)
+    cnt = int(m.sum())
+    if cnt < min_frames:
+        return np.inf, 0.0, 0, cnt
+    diff = (cent(dry_f0[m]) - cent(rv[m]) + 600.0) % 1200.0 - 600.0
+    semis = np.arange(-5, 7, dtype=np.float64)[:, None] * 100.0
+    folded = np.abs(((diff[None, :] - semis + 600.0) % 1200.0) - 600.0)
+    meds = np.median(folded, axis=1)
+    best_i = int(np.argmin(meds))
+    return float(meds[best_i]), float(np.mean(folded[best_i] <= 120.0)), int(best_i - 5), cnt
+
+
+def _top_xcorr_peaks(a, b, max_lag_frames, k=6, min_sep_frames=50):
+    """求 corr[lag] = Σ_t b[t + lag] * a[t] 的前 k 个间距峰，lag 语义为 ref - dry（帧）。"""
+    size = 1 << int(np.ceil(np.log2(len(a) + len(b))))
+    cc = np.fft.irfft(np.fft.rfft(b, size) * np.conj(np.fft.rfft(a, size)), size)
+    ml = min(int(max_lag_frames), size // 2 - 1)
+    if ml <= 0:
+        return []
+    lags = np.arange(-ml, ml + 1)
+    vals = cc[np.mod(lags, size)]
+    order = np.argsort(vals)[::-1]
+    peaks = []
+    for idx in order:
+        lag = int(lags[idx])
+        if all(abs(lag - p[0]) >= min_sep_frames for p in peaks):
+            frac = 0.0
+            if 0 < idx < len(vals) - 1:
+                y0, y1, y2 = vals[idx - 1], vals[idx], vals[idx + 1]
+                den = y0 - 2.0 * y1 + y2
+                if abs(den) > 1e-9:
+                    frac = float(np.clip(0.5 * (y0 - y2) / den, -0.5, 0.5))
+            peaks.append((lag + frac, float(vals[idx])))
+            if len(peaks) >= k:
+                break
+    return peaks
+
+
 def wide_onset_offset(dry_f0, ref_f0, max_lag=12.0):
-    """宽范围全局偏移估计：兼容 ±1.5s 精搜与 ±12s 整体前奏/录音延迟。"""
-    from .align import COARSE_FPS, _decimate, _estimate_offset, _pitch_error_at
+    """宽范围全局偏移估计（正 = 干声比原唱晚）：移调无关，兼容 ±12s 前奏/录音延迟。"""
+    from .align import COARSE_FPS, _decimate, _estimate_offset
 
     near = onset_offset(dry_f0, ref_f0, max_lag=1.5)
     if len(dry_f0) < 200 or len(ref_f0) < 200:
         return near
-    d10 = _decimate(dry_f0, FPS, COARSE_FPS)
-    r10 = _decimate(ref_f0, FPS, COARSE_FPS)
-    coarse = float(np.clip(_estimate_offset(d10, r10, COARSE_FPS), -max_lag, max_lag))
-    if abs(coarse) <= 1.2:
-        return near
     a, b = onset_train(dry_f0), onset_train(ref_f0)
     if not (a.any() and b.any()):
         return near
-    size = 1 << int(np.ceil(np.log2(len(a) + len(b))))
-    cc = np.fft.irfft(np.fft.rfft(b, size) * np.conj(np.fft.rfft(a, size)), size)
-    center = -int(round(coarse * FPS))
-    rad = int(round(1.0 * FPS))
-    lags = np.arange(center - rad, center + rad + 1)
-    vals = cc[np.mod(lags, size)]
-    k = int(np.argmax(vals))
-    frac = 0.0
-    if 0 < k < len(vals) - 1:
-        y0, y1, y2 = vals[k - 1], vals[k], vals[k + 1]
-        den = y0 - 2 * y1 + y2
-        if abs(den) > 1e-9:
-            frac = float(np.clip(0.5 * (y0 - y2) / den, -0.5, 0.5))
-    far = -(lags[k] + frac) / FPS
-    err_near, n_near = _pitch_error_at(dry_f0, ref_f0, -int(round(near * FPS)))
-    err_far, n_far = _pitch_error_at(dry_f0, ref_f0, -int(round(far * FPS)))
-    if np.isfinite(err_far) and n_far >= 300 and (not np.isfinite(err_near) or err_far + 25.0 < err_near):
-        return far
-    return near
+    # 直接在 ±max_lag 全范围搜索移调无关的起音脉冲互相关峰值，并补充色度粗搜候选。
+    candidates = [-near]  # 候选均按 ref - dry（秒）表示
+    for lag_f, _ in _top_xcorr_peaks(a, b, int(round(max_lag * FPS)), k=6, min_sep_frames=50):
+        c = lag_f / FPS
+        if all(abs(c - prev) > 0.15 for prev in candidates):
+            candidates.append(c)
+    d10 = _decimate(dry_f0, FPS, COARSE_FPS)
+    r10 = _decimate(ref_f0, FPS, COARSE_FPS)
+    coarse_ref_minus_dry = -float(np.clip(_estimate_offset(d10, r10, COARSE_FPS), -max_lag, max_lag))
+    if abs(coarse_ref_minus_dry) > 1.2 and all(abs(coarse_ref_minus_dry - prev) > 0.4 for prev in candidates):
+        size = 1 << int(np.ceil(np.log2(len(a) + len(b))))
+        cc = np.fft.irfft(np.fft.rfft(b, size) * np.conj(np.fft.rfft(a, size)), size)
+        center = int(round(coarse_ref_minus_dry * FPS))
+        rad = int(round(1.0 * FPS))
+        lags = np.arange(center - rad, center + rad + 1)
+        vals = cc[np.mod(lags, size)]
+        k = int(np.argmax(vals))
+        frac = 0.0
+        if 0 < k < len(vals) - 1:
+            y0, y1, y2 = vals[k - 1], vals[k], vals[k + 1]
+            den = y0 - 2.0 * y1 + y2
+            if abs(den) > 1e-9:
+                frac = float(np.clip(0.5 * (y0 - y2) / den, -0.5, 0.5))
+        candidates.append((lags[k] + frac) / FPS)
+
+    near_err, near_in, _, near_n = _key_invariant_pitch_error(
+        dry_f0, ref_f0, int(round(-near * FPS)), min_frames=200)
+    best_ref_minus_dry = -near
+    best_err = near_err
+    for cand in candidates[1:]:
+        err, in_key, _, cnt = _key_invariant_pitch_error(
+            dry_f0, ref_f0, int(round(cand * FPS)), min_frames=200)
+        if not np.isfinite(err) or cnt < 200:
+            continue
+        # 仅当远处候选明显优于 ±1.5s 近处峰（至少低 25 音分且旋律一致）时采纳。
+        if (not np.isfinite(best_err) or err + 25.0 < best_err) and (err <= 130.0 or in_key >= 0.55):
+            best_ref_minus_dry = cand
+            best_err = err
+    return -float(best_ref_minus_dry)
 
 
-def onset_alignment(dry_f0, ref_f0, global_offset, skip=0.08):
+def _track_offset_windows(dry_f0, ref_f0, pred_fn, radius_s=2.5, win_s=20.0, step_s=10.0):
+    nd, nr = len(dry_f0), len(ref_f0)
+    win_f = int(round(win_s * FPS))
+    step_f = int(round(step_s * FPS))
+    rad_f = int(round(radius_s * FPS))
+    pts = []
+    for i0 in range(0, max(1, nd - win_f // 2), step_f):
+        i1 = min(nd, i0 + win_f)
+        if i1 - i0 < int(round(10.0 * FPS)):
+            continue
+        d_seg = dry_f0[i0:i1]
+        if int((d_seg > 0).sum()) < 150:
+            continue
+        t_mid = 0.5 * (i0 + i1) / FPS
+        exp_lag = float(pred_fn(t_mid))
+        j0 = max(0, i0 + int(round((exp_lag - radius_s) * FPS)))
+        j1 = min(nr, i1 + int(round((exp_lag + radius_s) * FPS)))
+        if j1 - j0 < int(round(8.0 * FPS)):
+            continue
+        r_seg = ref_f0[j0:j1]
+        if int((r_seg > 0).sum()) < 150:
+            continue
+        a, b = onset_train(d_seg), onset_train(r_seg)
+        if not (a.any() and b.any()):
+            continue
+        exp_loc = i0 + exp_lag * FPS - j0
+        max_loc = int(abs(exp_loc) + rad_f + 10)
+        peaks = _top_xcorr_peaks(a, b, max_loc, k=4, min_sep_frames=20)
+        best = None
+        for loc_lag, val in peaks:
+            if abs(loc_lag - exp_loc) > rad_f + 5:
+                continue
+            rmd_f = (j0 - i0) + loc_lag
+            mad, in_key, key_k, _ = _key_invariant_pitch_error(
+                d_seg, ref_f0, int(round(rmd_f + i0)), min_frames=100)
+            if not np.isfinite(mad):
+                continue
+            if mad <= 115.0 and in_key >= 0.55:
+                cand = (mad - 25.0 * in_key, rmd_f / FPS, key_k, mad, in_key, val)
+                if best is None or cand[0] < best[0]:
+                    best = cand
+        if best is not None:
+            pts.append((t_mid, best[1], best[2], best[3], best[4], best[5]))
+    return pts
+
+
+def estimate_affine_alignment(dry_f0, ref_f0, max_lag=12.0, max_scale_dev=0.04):
+    """移调无关的全局仿射对齐估计：t_ref ≈ scale * t_dry + offset。
+
+    通过滑窗起音互相关 + 移调无关旋律校验提取全曲多窗时差，自动区分：
+      1) 恒定录音偏移（scale = 1.0，offset = 恒定时差）；
+      2) 不同版本伴奏/母带导致的微小线性变速漂移（如 0.4% 速度差导致首尾差 600ms）。
+    只有全曲 ≥4 窗、跨度 ≥40s 且线性残差远低于恒定残差时才启用非 1.0 速度比。
+    """
+    empty = dict(
+        scale=1.0, offset=0.0, reliable=False, scale_applied=False,
+        inliers=0, total_windows=0, span_seconds=0.0,
+        const_residual_ms=0.0, linear_residual_ms=0.0, drift_ms=0.0, key_semitones=0,
+    )
+    if dry_f0 is None or ref_f0 is None or len(dry_f0) < 200 or len(ref_f0) < 200:
+        return empty
+    a, b = onset_train(dry_f0), onset_train(ref_f0)
+    if not (a.any() and b.any()):
+        return empty
+    peaks = _top_xcorr_peaks(a, b, int(round(max_lag * FPS)), k=5, min_sep_frames=60)
+    centers = [p[0] / FPS for p in peaks]
+    wo = -wide_onset_offset(dry_f0, ref_f0, max_lag=max_lag)
+    if all(abs(wo - c) > 0.35 for c in centers):
+        centers.insert(0, wo)
+    if all(abs(c) > 0.5 for c in centers):
+        centers.append(0.0)
+
+    best_pts = []
+    for c in centers[:4]:
+        pts = _track_offset_windows(dry_f0, ref_f0, lambda _t, _c=c: _c, radius_s=2.5)
+        if len(pts) > len(best_pts):
+            best_pts = pts
+    if len(best_pts) < 3:
+        return empty
+
+    keys = np.array([p[2] for p in best_pts])
+    best_key = int(max(
+        range(-5, 7),
+        key=lambda k: (
+            int(np.sum(((keys - k + 6) % 12) - 6 == 0)),
+            int(np.sum(np.abs(((keys - k + 6) % 12) - 6) <= 1)),
+            -abs(k),
+        ),
+    ))
+    pts = [p for p in best_pts if abs(((p[2] - best_key + 6) % 12) - 6) <= 1]
+    if len(pts) < 3:
+        return empty
+
+    ts = np.array([p[0] for p in pts], dtype=np.float64)
+    ys = np.array([p[1] for p in pts], dtype=np.float64)
+    slopes = [
+        (ys[j] - ys[i]) / (ts[j] - ts[i])
+        for i in range(len(ts)) for j in range(i + 1, len(ts))
+        if ts[j] - ts[i] >= 15.0 and abs((ys[j] - ys[i]) / (ts[j] - ts[i])) <= max_scale_dev
+    ]
+    if slopes:
+        s0 = float(np.median(slopes))
+        b0 = float(np.median(ys - s0 * ts))
+        if abs(s0) >= 0.0005:
+            pts2 = _track_offset_windows(dry_f0, ref_f0, lambda t, _s=s0, _b=b0: _s * t + _b, radius_s=1.2)
+            pts2 = [p for p in pts2 if abs(((p[2] - best_key + 6) % 12) - 6) <= 1]
+            if len(pts2) >= len(pts):
+                pts = pts2
+                ts = np.array([p[0] for p in pts], dtype=np.float64)
+                ys = np.array([p[1] for p in pts], dtype=np.float64)
+
+    c_med = float(np.median(ys))
+    c_err = np.abs(ys - c_med)
+    c_res = float(np.median(c_err))
+    c_inliers = c_err <= 0.12
+    c_count = int(c_inliers.sum())
+    c_span = float(np.ptp(ts[c_inliers])) if c_count >= 2 else 0.0
+
+    slopes = [
+        (ys[j] - ys[i]) / (ts[j] - ts[i])
+        for i in range(len(ts)) for j in range(i + 1, len(ts))
+        if ts[j] - ts[i] >= 15.0 and abs((ys[j] - ys[i]) / (ts[j] - ts[i])) <= max_scale_dev
+    ]
+    scale_applied = False
+    slope, intercept, lin_res, lin_span, lin_n = 0.0, c_med, c_res, c_span, c_count
+    if slopes:
+        s0 = float(np.median(slopes))
+        b0 = float(np.median(ys - s0 * ts))
+        inliers = np.abs(ys - (s0 * ts + b0)) <= 0.06
+        if int(inliers.sum()) >= 4:
+            slope, intercept = [float(v) for v in np.polyfit(ts[inliers], ys[inliers], 1)]
+            inliers = np.abs(ys - (slope * ts + intercept)) <= 0.06
+            if int(inliers.sum()) >= 4:
+                slope, intercept = [float(v) for v in np.polyfit(ts[inliers], ys[inliers], 1)]
+                lin_n = int(inliers.sum())
+                lin_span = float(np.ptp(ts[inliers]))
+                lin_res = float(np.median(np.abs(ys[inliers] - (slope * ts[inliers] + intercept))))
+                drift = abs(slope) * lin_span
+                if (
+                    lin_n >= 4
+                    and lin_n / len(ts) >= 0.70
+                    and lin_span >= 40.0
+                    and 0.0008 <= abs(slope) <= max_scale_dev
+                    and drift >= 0.12
+                    and lin_res <= 0.030
+                    and lin_res <= 0.45 * max(c_res, 1e-6)
+                ):
+                    scale_applied = True
+
+    if scale_applied:
+        return dict(
+            scale=1.0 + slope, offset=intercept, reliable=True, scale_applied=True,
+            inliers=lin_n, total_windows=len(ts), span_seconds=round(lin_span, 2),
+            const_residual_ms=round(c_res * 1000.0, 2),
+            linear_residual_ms=round(lin_res * 1000.0, 2),
+            drift_ms=round(abs(slope) * lin_span * 1000.0, 2),
+            key_semitones=best_key,
+        )
+    reliable = bool(c_count >= 3 and c_count / len(ts) >= 0.70 and c_span >= 20.0 and c_res <= 0.06)
+    off = float(np.median(ys[c_inliers])) if reliable else 0.0
+    return dict(
+        scale=1.0, offset=off, reliable=reliable, scale_applied=False,
+        inliers=c_count, total_windows=len(ts), span_seconds=round(c_span, 2),
+        const_residual_ms=round(c_res * 1000.0, 2),
+        linear_residual_ms=round(lin_res * 1000.0, 2),
+        drift_ms=round(abs(slope) * lin_span * 1000.0, 2),
+        key_semitones=best_key,
+    )
+
+
+def onset_alignment(dry_f0, ref_f0, global_offset, skip=0.08, scale=1.0):
     """把两轨的浊音起点做**单调对齐**（允许跳过任一侧），返回 (干声秒, 偏差秒)。
 
-    偏差 = 原唱位置 - 干声位置（正 = 干声进早了）。
+    偏差 = (原唱位置 + global_offset) - scale * 干声位置（正 = 干声进早了）。
     单调约束保证不会出现「第 5 个字对到第 4 个字」这种交叉错配。
     之前用最近邻配对：154 个点只配上 88 个，错配还会伪造出 ±1 个音节的假抖动
     （误以为相邻偏差差 110ms，实际只有 60ms）。
@@ -122,7 +359,7 @@ def onset_alignment(dry_f0, ref_f0, global_offset, skip=0.08):
                 continue
             best, c = INF, 0
             if i > 0 and j > 0:
-                v = D[i - 1, j - 1] + abs(td[i - 1] - (tr[j - 1] + global_offset))
+                v = D[i - 1, j - 1] + abs(scale * td[i - 1] - (tr[j - 1] + global_offset))
                 if v < best:
                     best, c = v, 0
             if i > 0 and D[i - 1, j] + skip < best:
@@ -145,7 +382,7 @@ def onset_alignment(dry_f0, ref_f0, global_offset, skip=0.08):
     if not pairs:
         return np.zeros(0), np.zeros(0)
     ta = np.array([td[a] for a, _ in pairs])
-    dv = np.array([(tr[b] + global_offset) - td[a] for a, b in pairs])
+    dv = np.array([(tr[b] + global_offset) - scale * td[a] for a, b in pairs])
     return ta, dv
 
 
