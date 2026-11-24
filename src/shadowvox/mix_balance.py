@@ -83,21 +83,58 @@ def curve(dry, baseline, bed, reference, original_bed, sr, original_dry=None,
     ref_rate = 0.45 if perceptual else 0.2
     combined_rate = 0.65 if perceptual else 0.2
     combined_sigma = 0.85 if perceptual else 1.5
-    if valid.any():
-        reference_gain = np.interp(times, centres[valid], anchors[valid])
-        reference_gain = _limit_rate(
-            gaussian_filter1d(reference_gain, sigma=(2.0 if perceptual else 3.0)/step, mode="nearest"),
-            times, maximum=ref_rate,
+    global_gain_db = 0.0
+    orig_global = None
+    cover_global = None
+    target_global = None
+    if perceptual and ref_active.any() and cover_active.any():
+        # 1) 全局人声-伴奏感知响度比对齐：
+        #    消除不同原曲混音/分离导致的极端原唱比例（如密集流行 -2.5~-3.3dB vs 稀疏钢琴 +3.6dB），
+        #    收敛到一致且自然的商用人声突出区间 [0.0, +2.2] dB；并与段落动态跟踪解耦，避免顶满限幅。
+        orig_global = float(np.median((ref - ref_bed)[ref_active]))
+        cover_global = float(np.median((vocal_db - bed_db)[cover_active]))
+        target_global = float(np.clip(0.65 * orig_global + 0.35 * 0.8, 0.0, 2.2))
+        global_gain_db = float(np.clip(target_global - cover_global, -5.0, 6.0))
+        # 2) 段落动态跟踪改为跟踪各自相对全局中位的起伏差（主歌/副歌对比），不重复叠加全局偏置
+        section_anchors = np.full(len(centres), np.nan)
+        for i, centre in enumerate(centres):
+            region = (times >= centre-6) & (times < centre+6)
+            a, b = region & ref_active, region & cover_active
+            if np.count_nonzero(a) >= required and np.count_nonzero(b) >= required:
+                orig_dev = float(np.median((ref - ref_bed)[a])) - orig_global
+                cover_dev = float(np.median((vocal_db - bed_db)[b])) - cover_global
+                section_anchors[i] = np.clip(-strength * (cover_dev - orig_dev), -2.5, 2.5)
+        sec_valid = np.isfinite(section_anchors)
+        if sec_valid.any():
+            reference_gain = np.interp(times, centres[sec_valid], section_anchors[sec_valid])
+            reference_gain = _limit_rate(
+                gaussian_filter1d(reference_gain, sigma=2.0/step, mode="nearest"),
+                times, maximum=ref_rate,
+            )
+            valid = sec_valid
+        else:
+            reference_gain = np.zeros(len(times))
+        local_mod = _limit_rate(
+            gaussian_filter1d(np.clip(reference_gain + rider, -2.5, 2.5), sigma=combined_sigma/step, mode="nearest"),
+            times, maximum=combined_rate,
         )
+        combined = global_gain_db + local_mod
     else:
-        reference_gain = np.zeros(len(times))
-    raw_combined = np.clip(reference_gain + rider, -3.0, max_boost_db) if perceptual else (reference_gain + rider)
-    combined = _limit_rate(
-        gaussian_filter1d(raw_combined, sigma=combined_sigma/step, mode="nearest"),
-        times, maximum=combined_rate,
-    )
-    return times, combined, {
-        "reference_used": bool(valid.any()), "reference_sections": int(valid.sum()),
+        if valid.any():
+            reference_gain = np.interp(times, centres[valid], anchors[valid])
+            reference_gain = _limit_rate(
+                gaussian_filter1d(reference_gain, sigma=(2.0 if perceptual else 3.0)/step, mode="nearest"),
+                times, maximum=ref_rate,
+            )
+        else:
+            reference_gain = np.zeros(len(times))
+        raw_combined = np.clip(reference_gain + rider, -3.0, max_boost_db) if perceptual else (reference_gain + rider)
+        combined = _limit_rate(
+            gaussian_filter1d(raw_combined, sigma=combined_sigma/step, mode="nearest"),
+            times, maximum=combined_rate,
+        )
+    stats = {
+        "reference_used": bool(valid.any() or orig_global is not None), "reference_sections": int(valid.sum()),
         "window_seconds": 12, "step_seconds": 2, "strength": strength,
         "perceptual_weighting": bool(perceptual),
         "reference_limit_db": 3.0, "max_boost_db": float(max_boost_db),
@@ -105,3 +142,11 @@ def curve(dry, baseline, bed, reference, original_bed, sr, original_dry=None,
         "gain_min_db": round(float(combined.min()), 3),
         "gain_max_db": round(float(combined.max()), 3),
     }
+    if orig_global is not None:
+        stats.update({
+            "global_gain_db": round(global_gain_db, 3),
+            "orig_global_ratio_db": round(orig_global, 2),
+            "cover_global_ratio_db": round(cover_global, 2),
+            "target_global_ratio_db": round(target_global, 2),
+        })
+    return times, combined, stats

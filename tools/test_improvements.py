@@ -544,6 +544,31 @@ class AdaptiveMixAndMSDuckTests(unittest.TestCase):
         mid_dip_db = 20.0 * np.log10(max(mid_bass, 1e-9) / max(mid_quiet, 1e-9))
         self.assertGreater(mid_dip_db, -0.8)
 
+    def test_perceptual_balance_keeps_vocal_to_backing_ratio_consistent_across_songs(self):
+        from shadowvox import mix_balance
+        sr = 16000
+        t = np.arange(16 * sr, dtype=np.float32) / sr
+        active = ((t % 4.0) < 3.0).astype(np.float32)
+        bed = np.vstack([0.15 * np.sin(2 * np.pi * 440 * t)] * 2).astype(np.float32)
+        # 场景 A：密集原曲（原唱比伴奏低 2.5dB）且翻唱进入时更低（-4dB），应被稳稳拉回到 >= 0dB 区间
+        quiet_ref = (0.11 * np.sin(2 * np.pi * 500 * t) * active).astype(np.float32)
+        quiet_cov = (0.095 * np.sin(2 * np.pi * 500 * t) * active).astype(np.float32)
+        _, gain_a, st_a = mix_balance.curve(
+            quiet_cov, np.vstack([quiet_cov, quiet_cov]), bed, quiet_ref, bed, sr, perceptual=True,
+        )
+        self.assertGreater(st_a['global_gain_db'], 3.0)
+        self.assertAlmostEqual(st_a['target_global_ratio_db'], 0.0, delta=0.1)
+        # 场景 B：稀疏原曲（原唱比伴奏高 4dB）且翻唱进入时过高（+6dB），应被收敛到 <= +2.2dB 区间
+        loud_ref = (0.24 * np.sin(2 * np.pi * 500 * t) * active).astype(np.float32)
+        loud_cov = (0.30 * np.sin(2 * np.pi * 500 * t) * active).astype(np.float32)
+        _, gain_b, st_b = mix_balance.curve(
+            loud_cov, np.vstack([loud_cov, loud_cov]), bed, loud_ref, bed, sr, perceptual=True,
+        )
+        self.assertLess(st_b['global_gain_db'], -3.0)
+        self.assertLessEqual(st_b['target_global_ratio_db'], 2.21)
+        # 两个极端场景经全局对齐后，目标比例落差应从原来的 ~6.5 dB 收敛到 <= 2.3 dB
+        self.assertLessEqual(abs(st_b['target_global_ratio_db'] - st_a['target_global_ratio_db']), 2.3)
+
 
 if __name__ == '__main__':
     unittest.main()

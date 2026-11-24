@@ -781,8 +781,12 @@ def enhance(vocal, accompaniment, sr, space=1., lowcut_hz=75., eq=1., compressio
             bed_bal, _ = _backing_ms_duck(accompaniment, analysis_y, sr, duck, diag=diag)
         else:
             bed_bal, _ = _backing(accompaniment, analysis_y, sr, duck)
-        baseline = (analysis_y[None,:] + early_reflections(analysis_y,sr) +
-                    room(analysis_y,sr,size=.52) + delay(analysis_y,sr))
+        if perceptual_balance:
+            # 感知平衡直接以处理后干声为基准，避免未闪避混响与早反射虚高人声电平估计
+            baseline = np.vstack([analysis_y, analysis_y])
+        else:
+            baseline = (analysis_y[None,:] + early_reflections(analysis_y,sr) +
+                        room(analysis_y,sr,size=.52) + delay(analysis_y,sr))
         times, curve_db, balance_stats = mix_balance.curve(
             analysis_y, baseline, bed_bal, reference_vocal, accompaniment, sr,
             original_dry=base_vocal, perceptual=perceptual_balance,
