@@ -86,9 +86,17 @@
           <button class="src src-menu" id="p-ver-btn" type="button" popovertarget="ver-menu" aria-controls="ver-menu" aria-expanded="false" title="选择成品版本" aria-label="选择成品版本" disabled><svg class="i"><use href="#i-chevron"/></svg></button>
         </div>
         <div class="inputs">
-          <button class="chip" id="in-song" type="button" data-kind="song" data-need="请先选择原曲" title="原曲（可拖入）" aria-label="原曲：未选择">
-            <svg class="i"><use href="#i-music"/></svg><span class="chip-name"><span class="mq">原曲</span></span>
-          </button>
+          <div class="song-input">
+            <button class="chip" id="in-song" type="button" data-kind="song" data-need="请先选择原曲" title="原曲（可拖入）" aria-label="原曲：未选择">
+              <svg class="i"><use href="#i-music"/></svg><span class="chip-name"><span class="mq">原曲</span></span>
+            </button>
+            <button class="chip" id="in-lyrics" type="button" data-kind="lyrics" title="选择或拖入原唱 LRC 歌词（可选）" aria-label="原唱 LRC 歌词（可选）：未选择">
+              <span class="chip-name"><span class="mq">LRC</span></span>
+            </button>
+            <button class="key lyrics-remove" id="clear-lyrics" type="button" title="移除 LRC 歌词" aria-label="移除 LRC 歌词" hidden>
+              <svg class="i" aria-hidden="true"><use href="#i-close"/></svg>
+            </button>
+          </div>
           <div class="dry-input">
             <button class="chip" id="in-dry" type="button" data-kind="dry" data-need="请先选择演唱干音" title="演唱干音（可拖入）" aria-label="演唱干音：未选择">
               <svg class="i"><use href="#i-mic"/></svg><span class="chip-name"><span class="mq">干音</span></span>
@@ -125,7 +133,16 @@
         <button class="out-card" id="out-card" type="button" data-need="请先选择输出目录" title="输出目录：每次生成自动保存为新版本（可拖入文件夹）" aria-label="输出目录：未选择">
           <svg class="i"><use href="#i-folder"/></svg><span class="out-path" id="out-path"><bdi>选择输出目录</bdi></span>
         </button>
-        <div class="presets" id="presets" role="group" aria-label="参数预设：左键空槽保存，左键已存槽应用；右键已存槽进入待确认，再右键删除、左键覆盖" title="左键空槽 = 保存当前参数；左键已存槽 = 应用；右键已存槽 = 待确认（再右键删除、左键覆盖，4 秒自动取消）"></div>
+        <div class="preset-tools" id="preset-tools">
+          <div class="presets" id="presets" role="group" aria-label="参数预设：左键空槽保存，左键已存槽应用；右键已存槽进入待确认，再右键删除、左键覆盖" title="左键空槽 = 保存当前参数；左键已存槽 = 应用；右键已存槽 = 待确认（再右键删除、左键覆盖，4 秒自动取消）"></div>
+          <button class="key key-labeled" id="genre-button" type="button" popovertarget="genre-menu" aria-controls="genre-menu" aria-expanded="false"><span id="genre-button-label">曲风</span><svg class="i" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+          <div class="menu genre-menu" id="genre-menu" popover="auto" role="group" aria-label="曲风预设">
+            <div class="genre-list" id="genre-list"></div>
+            <div class="genre-actions">
+              <button class="key key-labeled" id="genre-manual" type="button" disabled>切回手动调节</button>
+            </div>
+          </div>
+        </div>
         <button class="key key-labeled" id="btn-batch" type="button" aria-haspopup="dialog"><svg class="i" aria-hidden="true"><use href="#i-batch"/></svg><span id="batch-button-label">批处理</span></button>
       </section>
       <section class="racks" id="racks" aria-label="处理参数"></section>
@@ -180,7 +197,7 @@
     <div class="help-body" id="help-body"></div>
   </div>
 
-  <!-- 设置：版本 / 缓存 / VST3 -->
+  <!-- 应用设置 -->
   <div class="modal" id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
     <div class="modal-backdrop" data-close></div>
     <div class="modal-box modal-wide">
@@ -207,6 +224,13 @@
           <span class="set-label">主题色</span>
           <div class="theme-swatches" id="theme-swatches" role="group" aria-label="主题色">
             <label class="key key-labeled theme-custom"><input id="theme-custom" type="color" aria-label="自定义主题色">自定义</label>
+          </div>
+        </div>
+        <div class="set-row set-col" role="group" aria-labelledby="save-options-label">
+          <span class="set-label" id="save-options-label">保存选项</span>
+          <div class="save-options">
+            <label><input type="checkbox" data-save-option="save_original_stems">保存原曲分轨</label>
+            <label><input type="checkbox" data-save-option="save_processed_vocal">保存处理后的干声轨</label>
           </div>
         </div>
         <div class="set-row"><span class="set-label">分离缓存</span><span class="set-value" id="set-cache">—</span>

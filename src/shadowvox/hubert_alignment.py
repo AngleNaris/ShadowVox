@@ -25,6 +25,9 @@ LOCAL_JITTER = .004
 LARGE_RESIDUAL = .12
 
 
+_PINYIN_FALLBACK = {'n': 'en', 'ng': 'en', 'hm': 'hen', 'hng': 'heng', 'm': 'mu', 'r': 'er'}
+
+
 class ChineseAligner:
     def __init__(self):
         folder = C.MODELS/'hubertfa'
@@ -43,8 +46,13 @@ class ChineseAligner:
     def decode(self, wave, sr, text, offset=0.):
         from pypinyin import lazy_pinyin
         text = ''.join(c for c in text if _is_han(c))
-        tokens = lazy_pinyin(text)
-        if len(tokens) < 2 or any(t not in self.g2p.dictionary for t in tokens):
+        raw_tokens = lazy_pinyin(text)
+        tokens = []
+        for token in raw_tokens:
+            mapped = _PINYIN_FALLBACK.get(token, token)
+            if mapped in self.g2p.dictionary:
+                tokens.append(mapped)
+        if len(tokens) < 2:
             return []
         phones, words, indices = self.g2p(' '.join(tokens))
         x = resample_poly(wave, self.sr, sr).astype(np.float32) if sr != self.sr else np.asarray(wave, np.float32)
@@ -58,10 +66,13 @@ class ChineseAligner:
                      final_end=float(w.phonemes[-1].end)+offset) for w in decoded]
 
 
-def _text(model, wave, sr):
+def _text(model, wave, sr, prompt=None):
     x = resample_poly(wave, 16000, sr).astype(np.float32)
-    result = model.transcribe(x, language='zh', temperature=0, condition_on_previous_text=False,
-                             fp16=False, word_timestamps=True, verbose=None)
+    kwargs = dict(language='zh', temperature=0, condition_on_previous_text=False,
+                  fp16=False, word_timestamps=True, verbose=None)
+    if prompt:
+        kwargs['initial_prompt'] = prompt
+    result = model.transcribe(x, **kwargs)
     # 歌声的整窗 no_speech_prob 可偏高；已有可靠识别结果时不能据此删掉整句。
     return ''.join(s['text'] for s in result['segments']
                    if s.get('avg_logprob', 0) >= -1. and s.get('compression_ratio', 0) <= 2.4)
@@ -134,7 +145,8 @@ def anchors_for_words(words):
     for a,b in words:
         if not _usable_vowels(a,b):
             continue
-        if abs((b['start']-a['start'])-(b['final_start']-a['final_start'])) <= .10:
+        if (a['final_start'] > a['start'] + .005
+                and abs((b['start']-a['start'])-(b['final_start']-a['final_start'])) <= .10):
             anchors.append((a['start'],b['start']))
         anchors.append((a['final_start'],b['final_start']))
         trusted.append((a['final_start'],a['end']))
@@ -310,7 +322,27 @@ def summarize(pieces, plan, max_rate, moves=(), reasons=()):
     return stats
 
 
-def _matched_groups(dry, reference, sr, model, aligner, voiced, ref_voiced, offset, log):
+def _guided_reference(reference, sr, aligner, ref_voiced, lyrics, log):
+    """Use each line to bound forced alignment of the actual reference audio."""
+    words = []
+    duration = len(reference)/sr
+    for index, (start, text) in enumerate(lyrics):
+        if start >= duration:
+            break
+        end = lyrics[index+1][0] if index+1 < len(lyrics) else duration
+        left = max(0., start-.6, words[-1]['end'] if words else 0.)
+        right = min(duration, end+.2, start+12.)
+        if right-left < .35 or not ref_voiced[int(left*10):int(np.ceil(right*10))].any():
+            continue
+        log('[节奏] 用 LRC 定位原唱字句')
+        line = aligner.decode(reference[round(left*sr):round(right*sr)], sr, text, left)
+        if line and abs(line[0]['start']-start) <= 1.:
+            words.extend(line)
+    return words
+
+
+def _matched_groups(dry, reference, sr, model, aligner, voiced, ref_voiced, offset, log,
+                    guided_words, guided_windows, lyrics=()):
     duration, reference_duration = len(dry)/sr, len(reference)/sr
     windows = list(_windows(voiced,ref_voiced,duration))
     for number,(start,end) in enumerate(windows,1):
@@ -321,13 +353,37 @@ def _matched_groups(dry, reference, sr, model, aligner, voiced, ref_voiced, offs
             continue
         left, right = dry[round(a*sr):round(b*sr)], reference[round(c*sr):round(d*sr)]
         dw = aligner.decode(left,sr,_text(model,left,sr),a)
+
+        def matches(dry_words, ref_words):
+            for group in word_groups(dry_words, ref_words, offset):
+                group = [(l,r) for l,r in group if start <= l['start'] < end
+                         and a+.03 < l['start'] and l['end'] < b-.03
+                         and c+.03 < r['start'] and r['end'] < d-.03]
+                if len(group) >= 2:
+                    yield group
+
+        if guided_words:
+            cues = [w for w in guided_words if c+.03 < w['start'] and w['end'] < d-.03]
+            groups = list(matches(dw, cues))
+            words_in_window = sum(start <= w['start'] < end for w in dw)
+            matched_words = sum(_usable_vowels(l, r) for group in groups for l, r in group)
+            if not (matched_words >= 2 and matched_words*2 >= words_in_window) and lyrics and cues:
+                prompt = ''.join(text for ts, text in lyrics if c - 2. <= ts <= d + 1.)[:120]
+                if prompt:
+                    prompted_dw = aligner.decode(left, sr, _text(model, left, sr, prompt=prompt), a)
+                    p_groups = list(matches(prompted_dw, cues))
+                    p_words = sum(start <= w['start'] < end for w in prompted_dw)
+                    p_matched = sum(_usable_vowels(l, r) for group in p_groups for l, r in group)
+                    if p_matched >= 3 and p_matched * 2 >= p_words:
+                        groups, matched_words, words_in_window = p_groups, p_matched, p_words
+            if matched_words >= 2 and matched_words*2 >= words_in_window:
+                guided_windows.add(number)
+                for group in groups:
+                    yield start,end,group
+                continue
         rw = aligner.decode(right,sr,_text(model,right,sr),c)
-        for group in word_groups(dw,rw,offset):
-            group = [(l,r) for l,r in group if start <= l['start'] < end
-                     and a+.03 < l['start'] and l['end'] < b-.03
-                     and c+.03 < r['start'] and r['end'] < d-.03]
-            if len(group) >= 2:
-                yield start,end,group
+        for group in matches(dw, rw):
+            yield start,end,group
 
 
 def _phrase_spans(active,duration):
@@ -410,6 +466,86 @@ def _phrase_evidence(span,words,ref_spans,offset):
     return phrase
 
 
+def _acoustic_onset_groups(dry_f0, ref_f0, offset, existing_groups, duration, ref_duration):
+    """在已确认全局偏移后，用经旋律校验的浊音起音点补充 Whisper 漏识的句内入点锚点。"""
+    if dry_f0 is None or ref_f0 is None or len(dry_f0) < 30 or len(ref_f0) < 30:
+        return []
+    from .f0 import cent
+    from .rhythm import FPS, onset_alignment
+
+    # onset_alignment 的 global_offset 语义为「干声比原唱晚多少秒」，与此处 offset 互为相反数。
+    ta, dv = onset_alignment(dry_f0, ref_f0, -offset, skip=0.14)
+    if len(ta) < 2:
+        return []
+    tb = ta + dv + offset  # 原唱时间轴上的真实起音秒数
+    dry_c, ref_c = cent(dry_f0), cent(ref_f0)
+
+    # 收集已有歌词锚点区间，避免与高可信音素锚点冲突或交叉。
+    covered = []
+    for _, _, group in existing_groups:
+        if group:
+            covered.append((group[0][0]['start'] - 0.12, group[-1][0]['end'] + 0.12))
+
+    def is_covered(t):
+        return any(lo <= t <= hi for lo, hi in covered)
+
+    # 逐点做旋律一致性核验：起音后 150ms 内双轨有声且八度折叠后同旋律（避免误配不同字/杂音）。
+    verified = []
+    for td, tr in zip(ta, tb):
+        if abs(tr - td - offset) > 0.18:
+            continue
+        if td < 0.05 or td > duration - 0.15 or tr < 0.05 or tr > ref_duration - 0.15:
+            continue
+        if is_covered(td):
+            continue
+        i0 = int(round(td * FPS))
+        j0 = int(round(tr * FPS))
+        span = min(15, len(dry_f0) - i0, len(ref_f0) - j0)
+        if span < 6:
+            continue
+        d_seg, r_seg = dry_f0[i0:i0 + span], ref_f0[j0:j0 + span]
+        both = (d_seg > 0) & (r_seg > 0)
+        if int(both.sum()) < 5:
+            continue
+        diff = dry_c[i0:i0 + span][both] - ref_c[j0:j0 + span][both]
+        oct_shift = float(np.rint(np.median(diff) / 1200.0))
+        err = float(np.median(np.abs(diff - 1200.0 * oct_shift)))
+        if err > 240.0:
+            continue
+        end_d = min(duration - 0.02, td + max(0.08, float(both.sum()) / FPS))
+        end_r = min(ref_duration - 0.02, tr + max(0.08, float(both.sum()) / FPS))
+        verified.append((float(td), float(tr), end_d, end_r))
+
+    if len(verified) < 2:
+        return []
+
+    # 按停顿（>1.6s）和局部偏移一致性聚类成独立声学入点组（至少 2 个相邻一致入点）。
+    groups, current = [], []
+    for item in verified:
+        td, tr, _, _ = item
+        if current:
+            prev_td, prev_tr, _, _ = current[-1]
+            if td - prev_td > 1.6 or tr <= prev_tr + 0.04 or abs((tr - td) - (prev_tr - prev_td)) > 0.11:
+                if len(current) >= 2:
+                    groups.append(current)
+                current = []
+        current.append(item)
+    if len(current) >= 2:
+        groups.append(current)
+
+    extra = []
+    for g in groups:
+        pairs = []
+        for k, (td, tr, ed, er) in enumerate(g):
+            w_dry = dict(text=f'_ao{k}', start=td, end=ed, final_start=td, final_end=ed, acoustic_onset=True)
+            w_ref = dict(text=f'_ao{k}', start=tr, end=er, final_start=tr, final_end=er, acoustic_onset=True)
+            pairs.append((w_dry, w_ref))
+        win_start = max(0.0, g[0][0] - 0.6)
+        win_end = min(duration, g[-1][2] + 0.6)
+        extra.append((win_start, win_end, pairs))
+    return extra
+
+
 def _add_window(candidates,words,start,end,offset,phrase=None):
     if len(words) < 2:
         return
@@ -418,8 +554,9 @@ def _add_window(candidates,words,start,end,offset,phrase=None):
     if len(pairs) < minimum:
         return
     pairs = [(x,y-offset) for x,y in pairs]
-    lo = max(start,words[0][0]['start']-.35)
-    hi = min(end,words[-1][0]['end']+.35)
+    # 留足 0.60s 窗边缓冲，避免首尾字被 max_rate*(source-source[0]) 卡死在 35ms 内。
+    lo = max(start,words[0][0]['start']-.60)
+    hi = min(end,words[-1][0]['end']+.60)
     merge = candidates and candidates[-1].get('phrase') == phrase and lo < candidates[-1]['end']
     if merge:
         previous = candidates[-1]
@@ -450,10 +587,23 @@ def build_plan(groups, voiced, ref_voiced, duration, reference_duration, offset=
         a,_ = pair
         return locate((a['final_start']+a['final_end'])/2)
 
-    for start,end,group in groups:
+    for start,end,group in sorted(groups, key=lambda item: item[2][0][0]['start'] if item[2] else item[0]):
         _add_window(continuous,group,start,end,offset)
         usable = [(a,b) for a,b in group if _usable_vowels(a,b)]
-        pitch_pairs.extend((a['final_start'],a['final_end'],b['final_start'],b['final_end']) for a,b in usable)
+        for idx_u, (a, b) in enumerate(usable):
+            if a.get('acoustic_onset'):
+                continue
+            # 若连续字音的浊声母短且时序一致，纳入音高对应以避免连音字间回弹归零。
+            src_start, ref_start = a['final_start'], b['final_start']
+            if idx_u > 0:
+                prev_a, prev_b = usable[idx_u - 1]
+                gap_a = a['final_start'] - prev_a['final_end']
+                gap_b = b['final_start'] - prev_b['final_end']
+                if (0. < gap_a <= .08 and 0. < gap_b <= .08
+                        and abs((b['start'] - a['start']) - (b['final_start'] - a['final_start'])) <= .06):
+                    src_start = max(prev_a['final_end'], a['start'])
+                    ref_start = max(prev_b['final_end'], b['start'])
+            pitch_pairs.append((src_start, a['final_end'], ref_start, b['final_end']))
         for phrase, chunk in groupby(usable,key=phrase_index):
             words = list(chunk)
             if phrase is None:
@@ -481,21 +631,31 @@ def build_plan(groups, voiced, ref_voiced, duration, reference_duration, offset=
         acoustic_trusted=evidence & voiced,correspondence_trusted=evidence & voiced)
 
 
-def align(dry, reference, sr, log=print, strength=1., capture=None, max_rate=.10, offset_hint=0.):
+def align(dry, reference, sr, log=print, strength=1., capture=None, max_rate=.10, offset_hint=0., *, lyrics=(),
+          dry_f0=None, ref_f0=None):
     import torch
     import whisper
-    from .full_align import singing, render_segments
+    from .full_align import phrase_activity, render_segments
     torch.set_num_threads(min(8,torch.get_num_threads()))
     log('[节奏] 加载内置中文歌词识别和歌声音素模型')
     model = whisper.load_model(str(C.MODELS/'whisper-base.pt'),device='cpu')
     aligner = ChineseAligner()
-    voiced, ref_voiced = singing(dry,sr), singing(reference,sr)
+    voiced, ref_voiced = phrase_activity(dry,sr), phrase_activity(reference,sr)
     duration, reference_duration = len(dry)/sr, len(reference)/sr
+    guided_words = _guided_reference(reference,sr,aligner,ref_voiced,lyrics,log) if lyrics else ()
+    guided_windows = set()
     hint = offset_hint if abs(offset_hint) >= .18 else 0.
-    groups = list(_matched_groups(dry,reference,sr,model,aligner,voiced,ref_voiced,hint,log))
+    groups = list(_matched_groups(dry,reference,sr,model,aligner,voiced,ref_voiced,hint,log,
+                                  guided_words,guided_windows,lyrics=lyrics))
     offset = _confirmed_offset(groups,hint,_phrase_spans(voiced,duration))
     if hint and not offset:
-        groups = list(_matched_groups(dry,reference,sr,model,aligner,voiced,ref_voiced,0.,log))
+        guided_windows.clear()
+        groups = list(_matched_groups(dry,reference,sr,model,aligner,voiced,ref_voiced,0.,log,
+                                      guided_words,guided_windows,lyrics=lyrics))
+    # 补充经过旋律验证的浊音起音点，覆盖歌词识别漏字的句内入点。
+    acoustic_groups = _acoustic_onset_groups(dry_f0, ref_f0, offset, groups, duration, reference_duration)
+    if acoustic_groups:
+        groups = groups + acoustic_groups
     plan = build_plan(groups,voiced,ref_voiced,duration,reference_duration,offset)
     pieces,stats = plan_segments(plan,strength,max_rate)
     end = max(round(pieces[-1]['target'][-1]*sr),len(reference)+round(stats['reference_shift_seconds']*sr))
@@ -503,6 +663,9 @@ def align(dry, reference, sr, log=print, strength=1., capture=None, max_rate=.10
     if any('render_fallback' in p for p in pieces):
         moves,reasons = _phrase_moves(plan['phrases'],duration,float(np.clip(strength,0.,1.)))
         stats = summarize(pieces,plan,max_rate,moves,reasons)
-    log(f"[节奏] 中文音素锚点 {stats['lyric_anchors']}，实际变时 {len(stats['active_intervals_seconds'])} 段")
+    if lyrics:
+        stats['lrc_windows'] = len(guided_windows)
+    stats['acoustic_onset_anchors'] = sum(len(g) for _, _, g in acoustic_groups)
+    log(f"[节奏] 中文音素+声学入点锚点 {stats['lyric_anchors']}（声学补充 {stats['acoustic_onset_anchors']}），实际变时 {len(stats['active_intervals_seconds'])} 段")
     if capture is not None: capture.update(rhythm_plan=plan,rhythm_pieces=pieces)
     return out,stats

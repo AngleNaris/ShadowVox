@@ -116,6 +116,12 @@ class FcpeExtractor:
             from math import gcd
             g = gcd(int(sr), C.F0_SR)
             x = resample_poly(x, C.F0_SR // g, int(sr) // g).astype(np.float32)
+        # 偏小声录音先抬到合适工作电平，避免固定 -50 dBFS 门限裁掉弱唱段和句尾。
+        if x.size:
+            peak = float(np.max(np.abs(x)))
+            rms = float(np.sqrt(np.mean(np.square(x, dtype=np.float64))))
+            if rms > 1e-4 and 0. < peak < 0.25:
+                x = x * float(min(0.5 / peak, 10.0))
         x = _preprocess(x)
         mel = _mel(x)
         latent = self.sess.run(None, {self.in_name: mel[None]})[0][0]

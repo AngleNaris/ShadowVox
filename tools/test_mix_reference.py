@@ -59,7 +59,7 @@ class SelectedMixTests(unittest.TestCase):
         y = dry[0]
         env = mixing.envelope(y,self.sr,attack=.025,release=.25)
         activity = np.clip((20*np.log10(np.maximum(env,1e-8))+33)/18,0,1)
-        wet_gain = 10**(-4.5*activity/20)
+        wet_gain = 10**(-3.8*activity/20)
         reference = mixing.room(y,self.sr,size=.66)*10**((mixing.LONG_ROOM_RETURN_DB-3)/20)*wet_gain
         result = wet-dry-mixing.short_room(y,self.sr)
         np.testing.assert_allclose(result, reference*10**(3/20), atol=5e-7)
@@ -90,12 +90,12 @@ class SelectedMixTests(unittest.TestCase):
         silent_bed = np.zeros_like(self.bed)
         outputs = {}
         for eq, expected in ((1., (160., 1.2, 3.)),
-                             (1.5, (190., 3.6, 6.)),
-                             (2., (220., 6., 9.))):
+                             (1.5, (180., 2.5, 4.5)),
+                             (2., (200., 3.8, 6.))):
             mixed, report = mixing.enhance(self.voice,silent_bed,self.sr,space=0,duck=0,eq=eq)
             shelves = [report[key] for key in ('low_shelf_hz','low_shelf_gain_db','high_shelf_gain_db')]
             np.testing.assert_allclose(shelves,expected)
-            self.assertEqual(report['dynamic_body_max_db'],2.5*(eq-1.))
+            self.assertEqual(report['dynamic_body_max_db'],2.*(eq-1.))
             self.assertEqual(report['eq_bands'][0],[350,-2.])
             outputs[eq] = mixed
         self.assertGreater(float(np.max(np.abs(outputs[2.]-outputs[1.]))),1e-3)
@@ -191,11 +191,11 @@ class PipelineMixTests(unittest.TestCase):
                                                   true_peak_ceiling=-2.,master_density=1.), log=lambda _: None)
             self.assertFalse(bypassed['mixing']['enabled'])
             stats = fixed['mixing']
-            self.assertEqual((fixed['options']['target_lufs'], fixed['options']['true_peak_ceiling']),(-8.,-.5))
+            self.assertEqual((fixed['options']['target_lufs'], fixed['options']['true_peak_ceiling']),(-8.,-1.))
             self.assertFalse(stats['enabled'] or stats['density']['applied'])
             self.assertTrue(stats['readback_verified'] and stats['target_reached'])
             self.assertEqual(stats['engine'],'C+')
-            self.assertLessEqual(stats['measured_output_true_peak_dbtp'],-.5)
+            self.assertLessEqual(stats['measured_output_true_peak_dbtp'],-1.)
 
 
 if __name__ == '__main__':

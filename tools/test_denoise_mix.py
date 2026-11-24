@@ -111,8 +111,8 @@ class MixTests(unittest.TestCase):
         self.assertEqual(events.count("deess"),1)
         self.assertGreater(events.index("deess"),max(i for i,x in enumerate(events) if x != "deess"))
         self.assertEqual(info["deess_position"],"after_eq")
-        self.assertEqual(info["deess_strength"],.3)
-        self.assertLessEqual(info["max_deess_db"],1.02)
+        self.assertEqual(info["deess_strength"],.65)
+        self.assertLessEqual(info["max_deess_db"],4.2)
         self.assertEqual(result.shape,(2,len(voice)))
         self.assertTrue(np.isfinite(result).all())
 

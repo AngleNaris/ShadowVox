@@ -38,7 +38,7 @@ datas=[(str(root/'THIRD_PARTY.txt'),'licenses'),(str(root/'models/fcpe.onnx'),'m
        (str(root/'tools/vendor/deepfilternet/licenses'),'licenses/deepfilternet'),
        (str(zl_license),'licenses/zl-compressor')]
 datas += [(str(bundle),f'plugins/{bundle.name}') for bundle in zl_bundles]
-signalsmith=root/'tools/vendor/signalsmith/shadowvox-signalsmith.exe'
+signalsmith=Path(os.environ.get('SHADOWVOX_BUILD_SIGNALSMITH', root/'tools/vendor/signalsmith/shadowvox-signalsmith.exe'))
 if not signalsmith.is_file():
     raise SystemExit('请先运行 python tools/build_signalsmith.py')
 signalsmith_sources=root/'tools/signalsmith/third_party'

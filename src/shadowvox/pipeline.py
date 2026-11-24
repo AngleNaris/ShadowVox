@@ -55,6 +55,9 @@ class Options:
     dry_has_backing: bool = False
     mute_reference_gaps: bool = False
     fixed_master: bool = False
+    large_note_limit_cents: float | None = None
+    genre_preset: str = ''
+    mix_profile: dict | None = None
 
 
 def _detect_octave(dry_f0, ref_f0, move_seconds):
@@ -145,15 +148,35 @@ def render_waveform(vocal, sr, shift, renderer, *, f0=None, checkpoint=None):
     raise ValueError(f"未知渲染器: {renderer}")
 
 
-def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print, capture=None):
+def validate_reference(song, reference_vocal, instrumental):
+    if song and not (reference_vocal or instrumental):
+        return
+    if not song and reference_vocal and instrumental:
+        return
+    raise ValueError('请提供原曲，或同时提供原唱人声和伴奏')
+
+
+def run(dry_path, song_path=None, out_path=None, work_dir=None, opts=None, log=print, capture=None,
+        *, reference_vocal=None, instrumental=None, capture_vocal_mix=False, lyrics_path=None):
     opts = opts or Options()
-    if opts.fixed_master:
+    if opts.fixed_master and not opts.genre_preset:
         from .mastering import TARGET_LUFS, TRUE_PEAK_CEILING
         opts = replace(opts, target_lufs=TARGET_LUFS, true_peak_ceiling=TRUE_PEAK_CEILING)
-    dry_path, song_path = Path(dry_path), Path(song_path)
+    validate_reference(song_path, reference_vocal, instrumental)
+    dry_path = Path(dry_path)
+    if song_path:
+        song_path = Path(song_path)
+        source_path = song_path
+        reference = {'song': str(song_path)}
+        inputs = (dry_path, song_path)
+    else:
+        source_path = Path(reference_vocal)
+        instrumental = Path(instrumental)
+        reference = {'reference_vocal': str(source_path), 'instrumental': str(instrumental)}
+        inputs = (dry_path, source_path, instrumental)
     out_path = Path(out_path) if out_path else C.OUT_DIR / f"{dry_path.stem}_autotuned.wav"
-    work_dir = Path(work_dir) if work_dir else C.WORK_DIR / song_path.stem
-    report = {"app_version": __version__, "dry": str(dry_path), "song": str(song_path), "options": asdict(opts)}
+    work_dir = Path(work_dir) if work_dir else C.WORK_DIR / source_path.stem
+    report = {"app_version": __version__, "dry": str(dry_path), **reference, "options": asdict(opts)}
     if not 0 <= opts.strength <= 1:
         raise ValueError("修音强度必须在 0 到 1 之间")
     if not 0 <= opts.mix_space <= 2:
@@ -163,8 +186,9 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
     targets=(out_path,out_path.with_name(out_path.stem+"_vocal.wav"),out_path.with_suffix('.report.json'))
     if opts.comparison:
         targets += (out_path.with_name(out_path.stem+'_before.wav'),)
-    if any(p.resolve() in (dry_path.resolve(),song_path.resolve()) for p in targets):
-        raise ValueError("输出不能覆盖原曲或演唱干音")
+    input_paths = {p.resolve() for p in inputs}
+    if any(p.resolve() in input_paths for p in targets):
+        raise ValueError("输出不能覆盖输入音频")
     if out_path.suffix.lower() != ".wav":
         raise ValueError("成品输出请使用 .wav 扩展名")
     t_all = time.time()
@@ -201,9 +225,18 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
     else:
         report["denoise"] = {"enabled": False}
 
-    log("[2/6] 分离原曲")
-    ref_vocal, inst = _load_or_separate(song_path, work_dir, opts.separate_model,
-                                        opts.reuse_stems, log)
+    if song_path:
+        log("[2/6] 分离原曲")
+        ref_vocal, inst = _load_or_separate(song_path, work_dir, opts.separate_model,
+                                            opts.reuse_stems, log)
+    else:
+        log("[2/6] 读取原唱人声和伴奏")
+        ref_vocal = audio.load_mono(source_path, C.VOC_SR)
+        inst, _ = audio.load(instrumental, sr=C.VOC_SR, channels=2)
+        if len(ref_vocal) < inst.shape[1]:
+            ref_vocal = np.pad(ref_vocal, (0, inst.shape[1] - len(ref_vocal)))
+        elif len(ref_vocal) > inst.shape[1]:
+            inst = np.pad(inst, ((0, 0), (0, len(ref_vocal) - inst.shape[1])))
     if capture is not None:
         capture['reference_original'] = ref_vocal.copy()
         capture['inst_original'] = inst.copy() if inst is not None else None
@@ -237,6 +270,18 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
     rhythm_pieces = None
     rhythm_amount = opts.rhythm_strength if opts.rhythm else 0.
     chinese_pitch = opts.alignment_backend == 'hubertfa_zh' and opts.strength and opts.pitch_mode == 'register'
+    lyrics = ()
+    if lyrics_path:
+        from .lyric_anchors import read_lrc
+        lyric_status = {'file': Path(lyrics_path).name, 'status': 'unused', 'detail': '当前未启用中文对齐'}
+        report['lyrics'] = lyric_status
+        try:
+            lyrics = read_lrc(lyrics_path)
+        except (OSError, ValueError):
+            lyric_status.update(status='fallback', detail='无法读取有效的 LRC 歌词，使用自动识别')
+            log(f"[歌词] {lyric_status['detail']}")
+        if capture is not None:
+            capture['lyrics'] = lyrics
     if opts.rhythm_mode == "full" and (rhythm_amount or chinese_pitch):
         from .full_align import align, pitch_mapping
         alignment_capture = capture if capture is not None else {}
@@ -244,8 +289,16 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
         dry, rstat = align(dry, ref_vocal, C.VOC_SR, log=log,
                            strength=rhythm_amount, capture=alignment_capture,
                            max_rate=opts.rhythm_max_rate, backend=opts.alignment_backend,
-                           offset_hint=-rhythm.onset_offset(dry_f0,ref_f0) if opts.alignment_backend == 'hubertfa_zh' else 0.)
+                           offset_hint=-rhythm.wide_onset_offset(dry_f0,ref_f0) if opts.alignment_backend == 'hubertfa_zh' else 0.,
+                           lyrics=lyrics, dry_f0=dry_f0, ref_f0=ref_f0)
         report["rhythm"] = rstat
+        if lyrics and opts.alignment_backend == 'hubertfa_zh':
+            windows = rstat.get('lrc_windows', 0)
+            if windows:
+                lyric_status.update(status='used', detail=f'采用 LRC 辅助定位（{windows} 段）', windows=windows)
+            else:
+                lyric_status.update(status='fallback', detail='LRC 与音频匹配证据不足，使用自动识别')
+            log(f"[歌词] {lyric_status['detail']}")
         rhythm_pieces = alignment_capture['rhythm_pieces']
         reference_shift = rstat.get("reference_shift_seconds", 0.)
         if reference_shift:
@@ -258,10 +311,14 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
         dry_f0 = fcpe.extract(dry, C.VOC_SR)
         reference_times, reference_valid = pitch_mapping(rhythm_pieces,
             alignment_capture['rhythm_plan'], len(dry_f0), C.F0_FRAME_RATE)
+        from .align import augment_pitch_correspondence
+        reference_times, reference_valid, acoustic_added = augment_pitch_correspondence(
+            dry_f0, ref_f0, reference_times, reference_valid, fps=C.F0_FRAME_RATE)
         pitch_reference = dict(reference_times=reference_times, reference_valid=reference_valid)
         report['pitch_reference'] = {'basis': 'independent_correspondence',
             'trusted_seconds': round(float(reference_valid.sum()) / C.F0_FRAME_RATE, 3),
-            'voiced_trusted_frames': int(np.sum(reference_valid & (dry_f0 > 0)))}
+            'voiced_trusted_frames': int(np.sum(reference_valid & (dry_f0 > 0))),
+            'acoustic_fallback_frames': int(acoustic_added)}
         if capture is not None:
             capture['pitch_reference'] = pitch_reference
     elif opts.rhythm and opts.rhythm_strength:
@@ -291,6 +348,7 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
                          smooth_ms=opts.smooth_ms,
                          pitch_mode=opts.pitch_mode,
                          register_detail=opts.register_detail,
+                         large_note_limit_cents=opts.large_note_limit_cents,
                          offset_override=onset_offset, **pitch_reference)
 
     # 八度策略：默认 auto 只在干声本音区内修正（保留演唱者音色）；
@@ -308,6 +366,7 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
                                  smooth_ms=opts.smooth_ms,
                                  pitch_mode=opts.pitch_mode,
                                  register_detail=opts.register_detail,
+                                 large_note_limit_cents=opts.large_note_limit_cents,
                                  offset_override=onset_offset, **pitch_reference)
     report["octave_shift"] = octave_delta
 
@@ -338,7 +397,10 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
         voiced = (dry_f0 > 0) & (corr_f0 > 0)
         total = np.zeros(len(dry_f0))
         total[voiced] = 1200 * np.log2(corr_f0[voiced] / dry_f0[voiced])
-        vocal = render_waveform(dry, C.VOC_SR, total, opts.renderer, f0=input_f0)
+        if opts.renderer == ENGINE:
+            from .signalsmith import smooth_render_shift
+            total = smooth_render_shift(total, f0=dry_f0)
+        vocal = render_waveform(dry, C.VOC_SR, total, opts.renderer, f0=dry_f0)
     report["synth_seconds"] = round(len(vocal) / C.VOC_SR, 2)
 
     log("[6/6] 混音落盘")
@@ -368,14 +430,21 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
     vmask = np.repeat(ref_f0[:nf] > 0, spf)
     ref_voiced = ref_vocal[: len(vmask)][vmask]
     ref_voiced_rms = audio.rms(ref_voiced) or audio.rms(ref_vocal)
-    unscaled_rms = audio.rms(vocal)
-    target_rms = ref_voiced_rms
-    if opts.mute_reference_gaps:
-        # 静音空档不参与人声响度标定。
-        target_rms *= np.sqrt(kept/max(1,len(vocal)))
-    vocal = audio.match_rms(vocal, target_rms)
+    # 两侧统一按有声活动段 RMS 标定，消除静音占比和空档开关差异带来的音量偏差。
+    dnf = min(len(dry_f0), len(vocal) // spf)
+    dmask = np.repeat(dry_f0[:dnf] > 0, spf) if dnf > 0 else np.zeros(0, dtype=bool)
+    if len(dmask):
+        active_samples = vocal[:len(dmask)][dmask & (np.abs(vocal[:len(dmask)]) > 1e-4)]
+    else:
+        active_samples = np.zeros(0, dtype=np.float32)
+    unscaled_rms = audio.rms(active_samples) if active_samples.size >= spf * 5 else audio.rms(vocal)
+    if unscaled_rms > 1e-9 and ref_voiced_rms > 1e-9:
+        norm_gain = float(np.clip(ref_voiced_rms / unscaled_rms, 10 ** (-18. / 20.), 10 ** (18. / 20.)))
+        vocal = (vocal * norm_gain).astype(np.float32)
+    else:
+        norm_gain = 1.
     if capture is not None:
-        capture['vocal_normalization'] = (audio.rms(vocal) / unscaled_rms if unscaled_rms else 1.)
+        capture['vocal_normalization'] = norm_gain
     vocal = vocal * (10 ** (opts.vocal_gain_db / 20.0))
     report["vocal_rms_dbfs"] = round(20 * np.log10(max(audio.rms(vocal), 1e-9)), 1)
 
@@ -425,16 +494,20 @@ def run(dry_path, song_path, out_path=None, work_dir=None, opts=None, log=print,
                 lowcut_hz=opts.mix_lowcut_hz,eq=opts.mix_eq,compression=opts.mix_compression,
                 deessing=opts.mix_deess,harmonics=opts.mix_harmonics,reverb=opts.mix_reverb,
                 delay_amount=opts.mix_delay,duck=opts.mix_duck,
-                reference_vocal=ref_vocal[:n_mix],vocal_gain_db=opts.vocal_gain_db,capture=capture)
+                reference_vocal=ref_vocal[:n_mix],vocal_gain_db=opts.vocal_gain_db,capture=capture,
+                capture_vocal_mix=capture_vocal_mix,profile=opts.mix_profile)
             report["mixing"] = effect_stats
         else:
             mixed = inst[:, :n_mix] + stereo[:, :n_mix]
+            if capture is not None and capture_vocal_mix:
+                capture['vocal_mix'] = stereo[:, :n_mix]
             report["mixing"] = {"enabled":False}
         if opts.fixed_master:
             from .mastering import finalize, write_output
             log("[母带] C+ 响度校准与真峰值限幅")
-            mixed, master_stats = finalize(mixed, C.VOC_SR, (opts.master_density or 0.) if opts.mix_effects else 0.)
-            write_output(out_path, mixed, C.VOC_SR, master_stats)
+            mixed, master_stats = finalize(mixed, C.VOC_SR, (opts.master_density or 0.) if opts.mix_effects else 0.,
+                                           target_lufs=opts.target_lufs, true_peak_ceiling=opts.true_peak_ceiling)
+            write_output(out_path, mixed, C.VOC_SR, master_stats, true_peak_ceiling=opts.true_peak_ceiling)
             report['mixing'].update(master_stats)
         else:
             if opts.mix_effects:

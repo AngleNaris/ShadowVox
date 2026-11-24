@@ -38,6 +38,29 @@ def phrase_fixture(offsets, second_start=3.4, second_delay=0.):
 
 
 class HubertTests(unittest.TestCase):
+    def test_lrc_bounds_reference_audio_and_retains_decoded_onsets(self):
+        aligner = SimpleNamespace(decode=lambda wave, sr, text, offset:
+            [word(part, offset+.7+i*.32) for i, part in enumerate(text)])
+        ref = np.ones(5000, dtype=np.float32)
+        words = hfa._guided_reference(ref, 1000, aligner, np.ones(50, bool),
+                                      [(1., '你好'), (12., '错版')], lambda *_: None)
+        self.assertEqual([w['text'] for w in words], ['你', '好'])
+        self.assertAlmostEqual(words[0]['start'], 1.1)
+
+    def test_lrc_reference_requires_enough_word_matches_or_uses_automatic_reference(self):
+        words = [word(s, 1.+i*.25) for i,s in enumerate(('wo','ai','ni','jin','tian','hao'))]
+        aligner = SimpleNamespace(decode=lambda *_: words)
+        wave = np.zeros(4*1000, dtype=np.float32)
+        activity = np.ones(40, bool)
+        for cues, expected_calls, expected_usage in ((words, 1, {1}), (words[:2], 2, set())):
+            with self.subTest(cues=len(cues)), patch.object(hfa, '_text', return_value='词') as recognize:
+                usage = set()
+                groups = list(hfa._matched_groups(wave, wave, 1000, None, aligner, activity, activity,
+                                                  0., lambda *_: None, cues, usage))
+                self.assertEqual(sum(len(group) for _,_,group in groups), len(words))
+                self.assertEqual(usage, expected_usage)
+                self.assertEqual(recognize.call_count, expected_calls)
+
     def test_missing_word_does_not_shift_following_word_identity(self):
         left=[word(s,i*.4) for i,s in enumerate(['wo','ai','ni','jin','tian','hen','hao'])]
         right=[dict(w,start=w['start']+.06,end=w['end']+.06,final_start=w['final_start']+.06,
@@ -245,6 +268,22 @@ class HubertTests(unittest.TestCase):
             pieces,stats,offset=cache.plan(Options(rhythm_strength=.5),np.zeros(20))
         self.assertEqual(pieces,['piece']);self.assertEqual(offset,0)
         self.assertEqual(fn.call_args.args,(plan,.5,.1))
+
+    def test_preview_rebuild_uses_the_parsed_lyrics_snapshot(self):
+        wave = np.zeros(100, dtype=np.float32)
+        lyrics = [(1., '原唱')]
+        data = dict(options={'declip':False}, reference_original=wave, input_f0=wave, ref_f0=wave, lyrics=lyrics)
+        cache = PreviewCache(data, {})
+
+        def align(*_, capture, **kwargs):
+            self.assertIs(kwargs['lyrics'], lyrics)
+            capture['rhythm_plan'] = dict(backend='hubertfa_zh')
+
+        with patch('shadowvox.full_align.align', side_effect=align) as rebuild, \
+             patch('shadowvox.hubert_alignment.plan_segments', return_value=(['piece'], {})):
+            cache.plan(Options(), wave)
+            cache.plan(Options(), wave)
+        rebuild.assert_called_once()
 
     def test_recognizer_is_explicitly_chinese_and_filters_hallucination(self):
         model=SimpleNamespace(transcribe=lambda *args,**kw: self.transcribe(kw))

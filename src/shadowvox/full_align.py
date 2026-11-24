@@ -61,6 +61,20 @@ def singing(audio, sr):
     return active | np.r_[active[1:], False] | np.r_[False, active[:-1]]
 
 
+def phrase_activity(audio, sr):
+    """10Hz 网格活动检测：先用 ~25ms 子帧评估能量，不做 ±100ms 膨胀以保留 200ms 级换气停顿。"""
+    hop = round(sr * KEY_SECONDS)
+    sub = max(1, hop // 4)
+    count = max(1, int(np.ceil(len(audio) / hop)))
+    padded = np.pad(audio, (0, count * hop - len(audio)))
+    sub_frames = padded.reshape(count, hop)[:, :4 * sub].reshape(count * 4, sub)
+    sub_rms = np.sqrt(np.mean(np.square(sub_frames, dtype=np.float64), axis=1))
+    threshold = .1 * np.percentile(sub_rms, 90)
+    if threshold <= 1e-8:
+        return np.zeros(count, dtype=bool)
+    return np.mean((sub_rms > threshold).reshape(count, 4), axis=1) >= .5
+
+
 def _ordered(left, right):
     return (len(left) >= 2 and len(left) == len(right) and
             np.isfinite(left).all() and np.isfinite(right).all() and
@@ -253,6 +267,76 @@ def pitch_mapping(pieces, plan, frame_count, frame_rate=100., start_seconds=0.):
     return reference_times, valid
 
 
+def _render_pause(x, want, sr):
+    """在停顿区最低能量处裁切或平缓延展底噪，避免重采样导致换气声和尾音变调。"""
+    n = len(x)
+    if want <= 0:
+        return np.zeros(0, dtype=np.float32)
+    if n == want:
+        return x.copy()
+    if n < 64 or want < 64:
+        pos = np.linspace(0., max(0, n - 1), want)
+        return np.interp(pos, np.arange(n), x).astype(np.float32)
+    power = np.r_[0., np.cumsum(np.square(x, dtype=np.float64))]
+    if want < n:
+        cut = n - want
+        margin = min(round(.015 * sr), want // 4)
+        lo_bound = margin
+        hi_bound = max(lo_bound, n - cut - margin)
+        if hi_bound > lo_bound:
+            starts = np.arange(lo_bound, hi_bound + 1)
+            energies = power[starts + cut] - power[starts]
+            best = int(starts[int(np.argmin(energies))])
+        else:
+            best = (n - cut) // 2
+        right_start = best + cut
+        max_xf = min(round(.025 * sr), want // 3, 2 * best, 2 * (n - right_start))
+        xf = max(0, max_xf)
+        half = xf // 2
+        y = np.empty(want, dtype=np.float32)
+        if xf >= 2 and best - half >= 0 and right_start - half + xf <= n:
+            w = (.5 - .5 * np.cos(np.pi * np.linspace(0., 1., xf, dtype=np.float32)))
+            y[:best - half] = x[:best - half]
+            y[best - half:best - half + xf] = (
+                x[best - half:best - half + xf] * (1. - w)
+                + x[right_start - half:right_start - half + xf] * w
+            )
+            y[best - half + xf:] = x[right_start - half + xf:]
+        else:
+            y[:best] = x[:best]
+            y[best:] = x[right_start:]
+        return y
+
+    # 延展停顿：选取能量最低的片段做镜像平缓循环填充，保留首尾换气和尾音原速原调。
+    add = want - n
+    seg = min(round(.06 * sr), max(16, n // 4))
+    margin = min(round(.015 * sr), (n - seg) // 2)
+    lo_bound = max(0, margin)
+    hi_bound = max(lo_bound, n - seg - margin)
+    starts = np.arange(lo_bound, hi_bound + 1)
+    energies = power[starts + seg] - power[starts]
+    best = int(starts[int(np.argmin(energies))])
+    mid = best + seg // 2
+    tone = x[best:best + seg]
+    cycle = np.concatenate([tone, tone[::-1]]) if len(tone) > 1 else tone
+    xf = min(round(.02 * sr), mid, n - mid, seg // 2)
+    need = add + 2 * xf
+    fill = np.resize(cycle, need).astype(np.float32) if len(cycle) else np.zeros(need, dtype=np.float32)
+    y = np.empty(want, dtype=np.float32)
+    if xf >= 2:
+        w = (.5 - .5 * np.cos(np.pi * np.linspace(0., 1., xf, dtype=np.float32)))
+        y[:mid - xf] = x[:mid - xf]
+        y[mid - xf:mid] = x[mid - xf:mid] * (1. - w) + fill[:xf] * w
+        y[mid:mid + add] = fill[xf:xf + add]
+        y[mid + add:mid + add + xf] = fill[xf + add:add + 2 * xf] * (1. - w) + x[mid:mid + xf] * w
+        y[mid + add + xf:] = x[mid + xf:]
+    else:
+        y[:mid] = x[:mid]
+        y[mid:mid + add] = fill[:add]
+        y[mid + add:] = x[mid:]
+    return y
+
+
 def _render_phrase_timeline(dry, pieces, sr, start, end, checkpoint):
     out = np.zeros(end-start,dtype=np.float32)
     for pause,group in groupby(pieces,key=lambda p:p.get('pause',False)):
@@ -268,12 +352,12 @@ def _render_phrase_timeline(dry, pieces, sr, start, end, checkpoint):
         if np.array_equal(src-src[0],dst-dst[0]):
             out[a-start:b-start] = x[a-dst[0]:b-dst[0]]
             continue
+        want = int(dst[-1] - dst[0])
         if pause:
             # Time is gained or returned only inside the protected, low-activity gaps.
-            samples = np.interp(np.arange(a,b),dst,src)-src[0]
-            out[a-start:b-start] = np.interp(samples,np.arange(len(x)),x)
+            y = _render_pause(x, want, sr)
+            out[a-start:b-start] = y[a-dst[0]:b-dst[0]]
             continue
-        want = dst[-1]-dst[0]
         same_rate = np.max(abs((source-source[0])-(target-target[0]))) < 1e-7
         y = x.copy() if same_rate else stretch(x,(src-src[0])/sr,(dst-dst[0])/sr,sr,checkpoint=checkpoint)
         if not same_rate:
@@ -364,10 +448,11 @@ def render_segments(dry, pieces, sr, start=0, end=None, *, checkpoint=None):
 
 
 def align(dry, reference, sr, use_lyrics=True, log=print, strength=1., capture=None, max_rate=.10,
-          backend='legacy', offset_hint=0.):
+          backend='legacy', offset_hint=0., *, lyrics=(), dry_f0=None, ref_f0=None):
     if backend == 'hubertfa_zh':
         from .hubert_alignment import align as chinese_align
-        return chinese_align(dry,reference,sr,log,strength,capture,max_rate,offset_hint)
+        return chinese_align(dry,reference,sr,log,strength,capture,max_rate,offset_hint,
+                             lyrics=lyrics,dry_f0=dry_f0,ref_f0=ref_f0)
     c1, o1 = features(dry, sr)
     c2, o2 = features(reference, sr)
     dry_t, ref_t = _warping_path(c1, o1, c2, o2)

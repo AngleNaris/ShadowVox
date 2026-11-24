@@ -2,10 +2,31 @@
 import sys
 import unittest
 from pathlib import Path
+import tempfile
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from shadowvox.lyric_anchors import match_words, _recognize, _needs_phrase_recognition
+from shadowvox.lyric_anchors import match_words, read_lrc, _recognize, _needs_phrase_recognition
+
+
+class LrcReadingTests(unittest.TestCase):
+    def test_sorts_line_times_and_applies_offset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lyrics = Path(directory)/'歌.lrc'
+            text = ('[ti:测试]\n[00:03.4][00:01.20]<00:01.20>原<00:01.60>唱\n'
+                    '[00:03.40]同一时间的第二行\n[offset:+100]\n[00:10.00]\n')
+            for encoding in ('utf-8-sig', 'gb18030', 'utf-16'):
+                with self.subTest(encoding=encoding):
+                    lyrics.write_bytes(text.encode(encoding))
+                    self.assertEqual([(round(time, 3), title) for time, title in read_lrc(lyrics)],
+                                     [(1.1, '原唱'), (3.3, '原唱')])
+
+    def test_rejects_untimed_lyrics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lyrics = Path(directory)/'untimed.lrc'
+            lyrics.write_text('[ti:歌名]\n没有时间戳', encoding='utf-8')
+            with self.assertRaises(ValueError):
+                read_lrc(lyrics)
 
 
 def words(text, start=0., step=.3):

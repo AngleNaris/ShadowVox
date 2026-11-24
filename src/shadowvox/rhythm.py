@@ -61,6 +61,42 @@ def onset_offset(dry_f0, ref_f0, max_lag=1.5):
     return -(lags[k] + frac) / FPS
 
 
+def wide_onset_offset(dry_f0, ref_f0, max_lag=12.0):
+    """宽范围全局偏移估计：兼容 ±1.5s 精搜与 ±12s 整体前奏/录音延迟。"""
+    from .align import COARSE_FPS, _decimate, _estimate_offset, _pitch_error_at
+
+    near = onset_offset(dry_f0, ref_f0, max_lag=1.5)
+    if len(dry_f0) < 200 or len(ref_f0) < 200:
+        return near
+    d10 = _decimate(dry_f0, FPS, COARSE_FPS)
+    r10 = _decimate(ref_f0, FPS, COARSE_FPS)
+    coarse = float(np.clip(_estimate_offset(d10, r10, COARSE_FPS), -max_lag, max_lag))
+    if abs(coarse) <= 1.2:
+        return near
+    a, b = onset_train(dry_f0), onset_train(ref_f0)
+    if not (a.any() and b.any()):
+        return near
+    size = 1 << int(np.ceil(np.log2(len(a) + len(b))))
+    cc = np.fft.irfft(np.fft.rfft(b, size) * np.conj(np.fft.rfft(a, size)), size)
+    center = -int(round(coarse * FPS))
+    rad = int(round(1.0 * FPS))
+    lags = np.arange(center - rad, center + rad + 1)
+    vals = cc[np.mod(lags, size)]
+    k = int(np.argmax(vals))
+    frac = 0.0
+    if 0 < k < len(vals) - 1:
+        y0, y1, y2 = vals[k - 1], vals[k], vals[k + 1]
+        den = y0 - 2 * y1 + y2
+        if abs(den) > 1e-9:
+            frac = float(np.clip(0.5 * (y0 - y2) / den, -0.5, 0.5))
+    far = -(lags[k] + frac) / FPS
+    err_near, n_near = _pitch_error_at(dry_f0, ref_f0, -int(round(near * FPS)))
+    err_far, n_far = _pitch_error_at(dry_f0, ref_f0, -int(round(far * FPS)))
+    if np.isfinite(err_far) and n_far >= 300 and (not np.isfinite(err_near) or err_far + 25.0 < err_near):
+        return far
+    return near
+
+
 def onset_alignment(dry_f0, ref_f0, global_offset, skip=0.08):
     """把两轨的浊音起点做**单调对齐**（允许跳过任一侧），返回 (干声秒, 偏差秒)。
 

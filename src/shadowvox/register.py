@@ -38,7 +38,8 @@ def fold_register(dry, reference, voiced):
     return target, reliable, octave
 
 
-def register_shift(dry, reference, voiced, strength, max_shift_cents=450, detail=0.):
+def register_shift(dry, reference, voiced, strength, max_shift_cents=450, detail=0.,
+                   large_note_limit_cents=LARGE_NOTE_LIMIT_CENTS):
     target, reliable, octave = fold_register(dry, reference, voiced)
     difference = target - dry
     shift = np.zeros(len(dry), dtype=np.float64)
@@ -50,7 +51,7 @@ def register_shift(dry, reference, voiced, strength, max_shift_cents=450, detail
     shift[~reliable] = 0
     large_notes = [(lo, hi) for _, _, lo, hi in _note_ranges(dry, reference, voiced, difference, octave)
                    if hi-lo >= 8 and round(abs(np.median(target[lo:hi])-np.median(dry[lo:hi])), 1)
-                   > LARGE_NOTE_LIMIT_CENTS]
+                   > large_note_limit_cents]
     protected, _ = _protect_large_notes(shift, large_notes)
     reliable[protected] = False
     return shift, reliable, octave
@@ -129,7 +130,8 @@ def _short_note_needs_plan(difference, legacy, start, end, lo, hi, delta):
     return False
 
 
-def correspondence_shift(dry, reference, voiced, strength, max_shift_cents=450, detail=0.):
+def correspondence_shift(dry, reference, voiced, strength, max_shift_cents=450, detail=0.,
+                         large_note_limit_cents=LARGE_NOTE_LIMIT_CENTS):
     """Plan stable short notes and slow centers in the singer's octave."""
     target, register_support, octave = fold_register(dry, reference, voiced)
     difference = target - dry
@@ -158,7 +160,7 @@ def correspondence_shift(dry, reference, voiced, strength, max_shift_cents=450, 
         pair = np.stack((dry[lo:hi], target[lo:hi]))
         centers = np.median(pair, axis=1)
         delta = float(centers[1] - centers[0])
-        if round(abs(delta), 1) > LARGE_NOTE_LIMIT_CENTS:
+        if round(abs(delta), 1) > large_note_limit_cents:
             large_notes.append((lo, hi))
         if count > 15 and abs(delta) <= 450.:
             continue

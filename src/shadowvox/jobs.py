@@ -5,6 +5,9 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import soundfile as sf
+
+from .config import VOC_SR
 from .signalsmith import ENGINE
 
 AUDIO_EXTS = {'.wav', '.mp3', '.flac', '.m4a', '.aac', '.ogg', '.aiff', '.wma'}
@@ -17,14 +20,18 @@ def options_from(p):
     """感知参数映射，兼容旧预设的修正、音色、空间与人声增益。"""
     from .mastering import TARGET_LUFS, TRUE_PEAK_CEILING
     from .pipeline import Options
-    detail, rate, harmonics, density = 0., .10, 1., 1.
+    from .presets import genre_options
+
+    if genre := (p.get('genre_preset') or ''):
+        return genre_options(genre, dry_has_backing=bool(p.get('dry_has_backing')))
+    detail, rate, harmonics, density = 0., .16, 1., 1.
     mute_gaps = False
     if 'correction' in p:
         correction, beauty, fusion, mixdown = (p[k]/100 for k in ('correction','beauty','fusion','mixdown'))
         cleanup, tone, space = (min(1.,2*x) for x in (correction,beauty,fusion))
         if not any(k in p for k in ('strength','rhythm_strength','rhythm','denoise_strength','denoise','declip')):
             detail = max(0.,2*correction-1)
-            rate += .025*detail
+            rate += .04*detail
         if not any(k in p for k in ('mix_lowcut_hz','mix_eq','mix_compression','mix_deess')):
             harmonics = tone
         density = mixdown
@@ -52,18 +59,27 @@ def options_from(p):
 
 
 def next_version(folder, stem):
-    pattern = re.compile(re.escape(stem)+r'_V(\d+)\.wav$', re.I)
+    pattern = re.compile(re.escape(stem) + r'_V(\d+)(?:_(?:reference_vocal|instrumental|processed_vocal))?\.wav$', re.I)
     taken = [int(m.group(1)) for f in Path(folder).glob('*.wav') if (m := pattern.match(f.name))]
     return max(taken, default=0)+1
 
 
-def export_job(dry, song, output, options, session, *, work=None, log=print, audition=False):
+def export_job(dry, song, output, options, session, *, work=None, log=print, audition=False,
+               reference_vocal=None, instrumental=None, save_original_stems=False, save_processed_vocal=False,
+               lyrics_path=None):
     from .pipeline import run
     from .reporting import build, html_report
 
     capture = {}
     temp = Path(tempfile.mkdtemp(dir=session))/'成品.wav'
-    report = run(dry, song, str(temp), work_dir=work, opts=options, log=log, capture=capture)
+    report = run(dry, song, str(temp), work_dir=work, opts=options, log=log, capture=capture,
+                 reference_vocal=reference_vocal, instrumental=instrumental, capture_vocal_mix=save_processed_vocal,
+                 lyrics_path=lyrics_path)
+    stems = {}
+    if save_original_stems:
+        stems.update(reference_vocal=capture['reference_original'], instrumental=capture['inst_original'])
+    if save_processed_vocal:
+        stems['processed_vocal'] = capture.pop('vocal_mix')
     result = {'report': report}
     if audition:
         from .preview import prepare
@@ -84,16 +100,26 @@ def export_job(dry, song, output, options, session, *, work=None, log=print, aud
         except FileExistsError:
             continue
     json_path, html_path = (target.with_suffix(suffix) for suffix in ('.report.json', '.report.html'))
+    stem_paths = {key: output/f'{target.stem}_{key}.wav' for key in stems}
+    created = [target]
     try:
         with stream, temp.open('rb') as source:
             shutil.copyfileobj(source, stream)
+        for key, path in stem_paths.items():
+            with path.open('xb') as handle:
+                created.append(path)
+                sf.write(handle, stems[key].T, VOC_SR, format='WAV', subtype='FLOAT')
+        if stem_paths:
+            report['stems'] = {key: str(path) for key, path in stem_paths.items()}
         saved = dict(report, output=str(target), audio_analysis=metrics)
         saved.pop('vocal_stem', None)
         saved.pop('comparison_before', None)
+        created.append(json_path)
         json_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding='utf-8')
+        created.append(html_path)
         html_path.write_text(html_report(saved, metrics, target), encoding='utf-8')
     except Exception:
-        for path in (target, json_path, html_path):
+        for path in created:
             path.unlink(missing_ok=True)
         raise
     return dict(result, analysis=metrics, version=n, path=str(target), html=str(html_path))
@@ -114,13 +140,18 @@ def run_batch(items, output, params, *, work=None, log=print, update=lambda _: N
         status = dict(index=index, state='running')
         update(status)
         try:
-            dry, song = (Path(item[key]) for key in ('dry', 'song'))
-            for path in (dry, song):
+            dry = Path(item['dry'])
+            reference = {key: Path(item[key]) for key in ('song', 'reference_vocal', 'instrumental') if item.get(key)}
+            for path in (dry, *reference.values()):
                 if not path.is_file() or path.suffix.lower() not in AUDIO_EXTS:
                     raise ValueError(f'音频文件不可用：{path}')
             options = options_from(dict(params, dry_has_backing=item.get('dry_has_backing', params.get('dry_has_backing', False))))
             with tempfile.TemporaryDirectory(prefix='shadowvox-batch-') as session:
-                result = export_job(dry, song, output, options, session, work=work, log=checkpoint)
+                result = export_job(dry, reference.pop('song', None), output, options, session, work=work,
+                                    log=checkpoint, **reference,
+                                    save_original_stems=bool(params.get('save_original_stems')),
+                                    save_processed_vocal=bool(params.get('save_processed_vocal')),
+                                    lyrics_path=params.get('lyrics_path'))
             status = dict(index=index, state='done', output=result['path'], html=result['html'])
         except InterruptedError:
             status = dict(index=index, state='cancelled')

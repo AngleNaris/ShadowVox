@@ -3,9 +3,11 @@
 识别文本只用于本次匹配，不写入报告。模型结果可能有误，孤立的字不作为锚点。
 """
 import math
+import re
 import unicodedata
 from collections import Counter
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 from numba import njit
@@ -17,6 +19,43 @@ OVERLAP_SECONDS = .5
 COARSE_OVERLAP_SECONDS = 3.
 MIN_PHRASE_SECONDS = 2.5
 FINE_CORE_SECONDS = 8.
+
+_LRC_TIME = r'([0-9]+):([0-5][0-9])(?:[.:]([0-9]{1,3}))?'
+_LRC_LINE = re.compile(r'\[' + _LRC_TIME + r'\]')
+_LRC_WORD = re.compile(r'<' + _LRC_TIME + r'>')
+_LRC_OFFSET = re.compile(r'^\[offset:\s*([+-]?[0-9]+)\]$', re.I | re.M)
+
+
+def read_lrc(path):
+    """Return sorted (seconds, lyric) pairs on the reference audio timeline."""
+    data = Path(path).read_bytes()
+    encoding = 'utf-16' if data.startswith((b'\xff\xfe', b'\xfe\xff')) else 'utf-8-sig'
+    try:
+        text = data.decode(encoding)
+    except UnicodeDecodeError:
+        text = data.decode('gb18030')
+    offset = 0.
+    rows = []
+    for entry in text.splitlines():
+        entry = entry.strip()
+        adjustment = _LRC_OFFSET.fullmatch(entry)
+        if adjustment:
+            offset = int(adjustment[1]) / 1000
+            continue
+        stamps = []
+        while stamp := _LRC_LINE.match(entry):
+            minute, second, fraction = stamp.groups(default='0')
+            stamps.append(int(minute) * 60 + int(second) + int(fraction) / 10**len(fraction))
+            entry = entry[stamp.end():].lstrip()
+        lyric = _LRC_WORD.sub('', entry).strip()
+        if lyric:
+            rows.extend((stamp, lyric) for stamp in stamps)
+    if not rows:
+        raise ValueError('没有可用的逐行时间戳歌词')
+    lines = {}
+    for stamp, lyric in rows:
+        lines.setdefault(max(0., stamp - offset), lyric)
+    return sorted(lines.items())
 
 
 def _is_han(char):

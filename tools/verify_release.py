@@ -8,6 +8,7 @@ import sys
 import time
 import types
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import soundfile as sf
@@ -16,7 +17,7 @@ from PyInstaller.utils.win32.versioninfo import read_version_info_from_executabl
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src'))
-from shadowvox import AUTHOR, __version__, mixing, pipeline
+from shadowvox import AUTHOR, __version__, mixing, pipeline, signalsmith
 from shadowvox.jobs import DESKTOP_RENDERER
 from shadowvox.reporting import build
 
@@ -32,6 +33,7 @@ def normalize(code):
 
 
 def check_archive(executable):
+    manifest = json.loads(executable.with_suffix('.release.json').read_text(encoding='utf-8'))
     package = CArchiveReader(str(executable))
     modules = package.open_embedded_archive('PYZ.pyz')
     checked = []
@@ -51,7 +53,9 @@ def check_archive(executable):
     helper = 'bin\\shadowvox-denoise.exe'
     assert hashlib.sha256(package.extract(helper)).hexdigest() == digest(ROOT/'tools/vendor/deepfilternet/shadowvox-denoise.exe')
     helper = 'bin\\shadowvox-signalsmith.exe'
-    assert hashlib.sha256(package.extract(helper)).hexdigest() == digest(ROOT/'tools/vendor/signalsmith/shadowvox-signalsmith.exe')
+    signalsmith = next(sha for path, sha in manifest['external_input_sha256'].items()
+                      if Path(path).name == 'shadowvox-signalsmith.exe')
+    assert hashlib.sha256(package.extract(helper)).hexdigest() == signalsmith
     model_files = []
     for path in (ROOT/'models').rglob('*'):
         key = str(path.relative_to(ROOT))
@@ -70,7 +74,6 @@ def check_archive(executable):
     info = read_version_info_from_executable(str(executable))
     assert __version__ in str(info), 'Windows 版本属性不一致'
     assert AUTHOR in str(info), 'Windows 作者署名不一致'
-    manifest = json.loads(executable.with_suffix('.release.json').read_text(encoding='utf-8'))
     assert manifest['version'] == __version__ and manifest['executable']['sha256'] == digest(executable)
     return dict(modules=checked, assets=assets, model_files=model_files, denoise_helper_matches=True, windows_version=__version__)
 
@@ -95,8 +98,11 @@ def main():
     else:
         output = folder/'source/reference.wav'
         output.parent.mkdir(parents=True, exist_ok=True)
+        renderer = output.parent/signalsmith.HELPER_NAME
+        renderer.write_bytes(CArchiveReader(str(executable)).extract(f'bin\\{renderer.name}'))
         capture = {}
-        with (folder/'source/pipeline.log').open('w', encoding='utf-8') as log:
+        with (folder/'source/pipeline.log').open('w', encoding='utf-8') as log, \
+                patch.object(signalsmith, '_executable', return_value=str(renderer)):
             def emit(message):
                 log.write(message+'\n'); log.flush()
             source = pipeline.run(request['dry'], request['song'], output, work_dir=request.get('work'),

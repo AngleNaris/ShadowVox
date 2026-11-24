@@ -4,13 +4,14 @@ import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'src'))
-from shadowvox import __version__, cli, jobs, pipeline, updates
+from shadowvox import __version__, cli, jobs, mixing, pipeline, updates
 
 
 class JobTests(unittest.TestCase):
@@ -61,15 +62,50 @@ class JobTests(unittest.TestCase):
     def test_cli_manifest_and_desktop_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory)/'items.json'
-            manifest.write_text('[{"dry":"vocal.wav","song":"reference.wav","dry_has_backing":true}]', encoding='utf-8')
+            manifest.write_text(json.dumps([
+                dict(dry='vocal.wav', song='reference.wav', dry_has_backing=True),
+                dict(dry='vocal2.wav', reference_vocal='original-vocal.wav', instrumental='backing.wav'),
+            ]), encoding='utf-8')
             with patch.object(jobs, 'run_batch', return_value=[]) as batch:
                 self.assertEqual(cli.main(['batch', '--manifest', str(manifest), '-o', directory,
                                            '--ratio', '-8', '--mixdown', '65', '--no-post']), 0)
             items, output, params = batch.call_args.args
             self.assertEqual(items[0]['dry'], str(manifest.parent/'vocal.wav'))
             self.assertTrue(items[0]['dry_has_backing'])
+            self.assertEqual(items[1]['reference_vocal'], str(manifest.parent/'original-vocal.wav'))
+            self.assertEqual(items[1]['instrumental'], str(manifest.parent/'backing.wav'))
             self.assertEqual(output, manifest.parent)
             self.assertEqual((params['ratio'], params['mixdown'], params['mix_effects']), (-8, 65, False))
+
+    def test_cli_requires_a_complete_and_exclusive_reference(self):
+        for args in (['dry.wav', '--reference-vocal', 'vocal.wav'],
+                     ['desktop', 'dry.wav', 'song.wav', '--reference-vocal', 'vocal.wav',
+                      '--instrumental', 'bed.wav', '-o', 'out'],
+                     ['batch', 'dry.wav', '--instrumental', 'bed.wav', '-o', 'out']):
+            with self.subTest(args=args), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                cli.main(args)
+            self.assertEqual(error.exception.code, 2)
+
+    def test_desktop_cli_accepts_optional_lrc_with_reference_stems(self):
+        with patch.object(jobs, 'run_batch', return_value=[]) as batch:
+            code = cli.main(['desktop', 'dry.wav', '--reference-vocal', 'vocal.wav',
+                             '--instrumental', 'bed.wav', '--lyrics', 'song.lrc', '-o', 'out'])
+        items, _, params = batch.call_args.args
+        self.assertEqual(code, 0)
+        self.assertEqual(items, [dict(dry='dry.wav', reference_vocal='vocal.wav', instrumental='bed.wav')])
+        self.assertEqual(params['lyrics_path'], Path('song.lrc'))
+
+    def test_captured_processed_vocal_is_the_wet_vocal_in_the_mix(self):
+        sr = 44100
+        t = np.arange(sr, dtype=np.float32)/sr
+        vocal = (.15*np.sin(2*np.pi*220*t) * (t < .5)).astype(np.float32)
+        bed = (.02*np.sin(2*np.pi*330*t) * np.ones((2, 1))).astype(np.float32)
+        capture = {}
+        mixed, _ = mixing.enhance(vocal, bed, sr, duck=0, capture=capture, capture_vocal_mix=True)
+        wet_vocal = capture['vocal_mix']
+        np.testing.assert_array_equal(mixed, bed + wet_vocal)
+        self.assertTrue(np.any(wet_vocal[:, sr//2:] != 0))
+        self.assertTrue(np.any(wet_vocal[0] != wet_vocal[1]))
 
 
 class UpdateTests(unittest.TestCase):

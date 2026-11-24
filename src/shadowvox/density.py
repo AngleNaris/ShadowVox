@@ -53,6 +53,9 @@ def densify(mixed, sr, input_lufs, amount, reference=None, *, checkpoint=None):
     else:
         band_levels = None
     threshold_shift = input_lufs + 8.68 + 18. - 6.*amount
+    # 消除 0 -> 1% 跳变：低密度区间平滑渐变压缩比与干湿混合，高密度区间逐步深入阈值。
+    wet_blend = float(np.clip(amount * 2.0, 0., 1.))
+    ratio_scale = 0.25 + 0.75 * amount
     starts = np.arange(0,mixed.shape[-1],BLOCK)
     centers = np.minimum(starts+BLOCK//2,mixed.shape[-1]-1)
     result = np.zeros_like(mixed)
@@ -63,13 +66,16 @@ def densify(mixed, sr, input_lufs, amount, reference=None, *, checkpoint=None):
         levels.append(level_db if band_levels is None else band_levels[index])
         section = uniform_filter1d(power,round(3.*sr),mode='nearest')[centers]
         follow = np.clip(10*np.log10(np.maximum(section,1e-20))-levels[-1],-12.,6.)
-        fx = _compressor(ratio,attack)
+        eff_ratio = 1.0 + (ratio - 1.0) * ratio_scale
+        fx = _compressor(eff_ratio, attack)
         rendered = np.empty_like(band)
         for block,start in enumerate(starts):
             fx.threshold_db_threshold_db = float(np.clip(threshold+threshold_shift+follow[block],-100.,0.))
             chunk = np.ascontiguousarray(band[:,start:start+BLOCK],dtype=np.float32)
             # 每个频段新建实例，保持分块状态并允许 Qt 后台线程处理。
             rendered[:,start:start+BLOCK] = fx.process(chunk,sr,reset=False)
+        if wet_blend < 1.0:
+            rendered = band + (rendered - band) * wet_blend
         result += rendered
         hop = round(sr*.05)
         count = band.shape[-1]//hop

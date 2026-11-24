@@ -18,6 +18,8 @@ from PySide6.QtCore import QEvent, QEventLoop, QPoint, QPointF, QSettings, Qt, Q
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
+import numpy as np
+import soundfile as sf
 
 from shadowvox.gui import StudioWindow
 from shadowvox import __version__, config as C
@@ -114,6 +116,27 @@ def check_gui():
     js = h.js
     assert js("document.querySelector('#dry-has-backing').disabled")
 
+    h.click('#genre-button')
+    h.until("$('#genre-menu').matches(':popover-open') && $('#genre-button').getAttribute('aria-expanded') === 'true'", 5)
+    assert js("$$('#genre-list button').length === 8 && $('#genre-manual').disabled")
+    h.shot('genre-presets')
+    h.key(Qt.Key_Escape)
+    h.until("!$('#genre-menu').matches(':popover-open') && document.activeElement.id === 'genre-button'", 5)
+    h.click('#genre-button'); h.click('[data-genre="说唱"]')
+    assert js("params().genre_preset === '说唱' && $('#sound-correction').disabled && $('#sound-beauty').disabled && $('#sound-mixdown').disabled && $('[data-switch=mix_effects]').disabled && !$('#genre-banner').hidden")
+    h.shot('genre-locked')
+    h.click('#btn-settings')
+    assert js('!saveOptions().save_original_stems && !saveOptions().save_processed_vocal')
+    h.click('[data-save-option=save_original_stems]')
+    h.click('[data-save-option=save_processed_vocal]')
+    h.shot('save-options')
+    h.key(Qt.Key_Escape); h.wait(350)
+    w.view.reload(); h.wait(1500); h.target = w.view.focusProxy()
+    assert js("saveOptions().save_original_stems && saveOptions().save_processed_vocal && params().genre_preset === '说唱' && $('#sound-correction').disabled")
+    h.click('#genre-unlock')
+    assert js("params().genre_preset === '' && !$('#sound-correction').disabled && $('#genre-banner').hidden")
+    js("applyPreset({params:{}}); 1")
+
     # 双轴：键盘微调、悬停读数、斜拖同时调整、双击复位。
     field = '.xy-field[data-x=correction]'
     point = field + ' .xy-point'
@@ -170,7 +193,7 @@ def check_gui():
     for width, height in ((720, 600), (840, 700), (980, 740), (1080, 780)):
         w.resize(width, height); h.wait(400)
         h.js("document.querySelector('#content').scrollTop = 0; 1")
-        m = h.jsj("""(() => { const c = document.querySelector('#content'), a = document.querySelector('#in-song').getBoundingClientRect(),
+        m = h.jsj("""(() => { const c = document.querySelector('#content'), a = document.querySelector('.song-input').getBoundingClientRect(),
             b = document.querySelector('.dry-input').getBoundingClientRect();
             return { overflow: c.scrollWidth - c.clientWidth, chipDw: Math.abs(a.width - b.width), chipDy: Math.abs(a.top - b.top),
             switchFits: document.querySelector('#live-preview').getBoundingClientRect().right <
@@ -178,6 +201,10 @@ def check_gui():
             racks: [...document.querySelectorAll('.rack')].map(r => Math.round(r.getBoundingClientRect().width)) }; })()""")
         assert m['overflow'] <= 0 and m['chipDw'] <= 1 and m['chipDy'] <= 1 and m['switchFits'], (width, m)
         layout[width] = m; h.shot(f'empty-{width}')
+        if width == 720:
+            h.click('#genre-button')
+            assert js("(() => { const r = $('#genre-menu').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; })()")
+            h.shot('genre-presets-720'); h.key(Qt.Key_Escape)
     evidence['layout'] = layout
     w.resize(980, 740); h.wait(300)
 
@@ -191,6 +218,22 @@ def check_gui():
     h.until("inputs.song && inputs.dry && localStorage.getItem('sv_output')", 10)
     assert js("document.querySelector('#in-dry .mq').textContent") == 'dry.wav'
     assert Path(json.loads(js("localStorage.getItem('sv_output')"))) == folder
+    lyrics = folder/'时间轴对应不同歌曲的原唱歌词.lrc'
+    lyrics.write_text('[03:12.00]其他歌曲的一句', encoding='utf-8')
+    selected = 'inputs.lyrics && !$("#clear-lyrics").hidden'
+    with patch('shadowvox.gui_bridge.QFileDialog.getOpenFileName', return_value=(str(lyrics), '')) as picker:
+        h.click('#in-lyrics'); h.until(selected, 5)
+        assert '*.lrc' in picker.call_args.args[-1]
+    h.click('#clear-lyrics'); h.until('!inputs.lyrics && $("#clear-lyrics").hidden', 5)
+    assert not w.bridge.inputs['lyrics']
+    alternate_song = folder/'alternate-song.wav'
+    alternate_song.write_bytes((selftest/'song.wav').read_bytes())
+    for selector, path in (('#in-lyrics', lyrics), ('#in-song', alternate_song),
+                           ('#in-song', selftest/'song.wav'), ('#in-lyrics', lyrics)):
+        pos = h.center(selector)
+        w.bridge.filesDropped.emit(json.dumps(dict(paths=[str(path)], x=pos.x(), y=pos.y())))
+        h.until(selected if selector == '#in-lyrics' else f'!inputs.lyrics && inputs.song.endsWith({json.dumps(path.name)})', 5)
+    w.resize(720, 600); h.wait(350); h.shot('lyrics-selected-720'); w.resize(980, 740); h.wait(350)
     assert js("!document.querySelector('#dry-has-backing').disabled && !params().dry_has_backing")
     js("document.querySelector('#dry-has-backing').focus(); 1"); h.key(Qt.Key_Space)
     assert js('params().dry_has_backing')
@@ -203,10 +246,20 @@ def check_gui():
     evidence['first_run_seconds'] = round(time.monotonic()-started, 1)
     assert (folder/'dry_V1.wav').is_file() and (folder/'dry_V1.report.html').is_file()
     report = json.loads((folder/'dry_V1.report.json').read_text(encoding='utf-8'))
+    assert report['lyrics']['status'] == 'fallback' and report['lyrics']['file'] == lyrics.name
+    assert '使用自动识别' in report['lyrics']['detail']
     assert report['mixing']['density']['applied']
     assert report['mixing']['engine'] == 'C+' and report['mixing']['readback_verified']
     assert report['mixing']['measured_output_true_peak_dbtp'] <= -.5
     assert report['output'] == str(folder/'dry_V1.wav') and 'vocal_stem' not in report and report['audio_analysis']['output']['lufs'] is not None
+    assert set(report['stems']) == {'reference_vocal', 'instrumental', 'processed_vocal'}
+    for key, channels in (('reference_vocal', 1), ('instrumental', 2), ('processed_vocal', 2)):
+        path = folder/f'dry_V1_{key}.wav'
+        assert Path(report['stems'][key]) == path
+        meta = sf.info(path)
+        assert (meta.samplerate, meta.channels, meta.subtype) == (44100, channels, 'FLOAT')
+    wet, _ = sf.read(report['stems']['processed_vocal'], dtype='float32')
+    assert len(wet) == sf.info(folder/'dry_V1.wav').frames and np.any(wet[:, 0] != wet[:, 1])
     assert js("document.querySelectorAll('#rp-summary dt').length") >= 7
     h.shot('done')
 
@@ -258,10 +311,17 @@ def check_gui():
     assert w.bridge.live_preview and w.bridge.player.selected == 1
 
     # 第二个版本：后期旁路仍走固定母带，版本菜单可切回 V1。
+    h.click('#btn-settings'); h.click('[data-save-option=save_original_stems]')
+    h.key(Qt.Key_Escape); h.wait(350)
     h.click('[data-switch=mix_effects]')
     h.click('#go'); h.until('run.busy', 10); h.until('state.ready && !run.busy && !run.settling && current === 2')
     assert (folder/'dry_V2.wav').is_file()
-    bypassed = json.loads((folder/'dry_V2.report.json').read_text(encoding='utf-8'))['mixing']
+    second_report = json.loads((folder/'dry_V2.report.json').read_text(encoding='utf-8'))
+    assert set(second_report['stems']) == {'processed_vocal'}
+    assert not (folder/'dry_V2_reference_vocal.wav').exists() and not (folder/'dry_V2_instrumental.wav').exists()
+    dry_stereo, _ = sf.read(second_report['stems']['processed_vocal'], dtype='float32')
+    np.testing.assert_array_equal(dry_stereo[:, 0], dry_stereo[:, 1])
+    bypassed = second_report['mixing']
     assert not bypassed['enabled'] and bypassed['engine'] == 'C+' and bypassed['readback_verified']
     assert not bypassed['density']['applied'] and bypassed['measured_output_true_peak_dbtp'] <= -.5
     h.click('#p-ver-btn'); h.wait(300); h.shot('versions')
@@ -282,6 +342,20 @@ def check_gui():
     c = h.center('#in-dry')
     w.bridge.filesDropped.emit(json.dumps(dict(paths=[str(changed_input)], x=c.x(), y=c.y())))
     h.until("inputs.dry.endsWith('alternate-dry.wav') && !params().dry_has_backing", 10)
+
+    # 批量从工作台读取保存选项，单独开启原曲分轨。
+    h.click('#btn-settings'); h.click('[data-save-option=save_original_stems]')
+    h.click('[data-save-option=save_processed_vocal]'); h.key(Qt.Key_Escape); h.wait(350)
+    js("applyPreset({params:{correction:0}, switches:{mix_effects:false}}); 1")
+    h.click('#btn-batch')
+    with patch('shadowvox.gui_bridge.QFileDialog.getOpenFileNames', return_value=([str(changed_input)], '')):
+        h.click('#batch-add')
+        h.until('batch.jobs.length === 1', 10)
+    h.click('#batch-start')
+    h.until("batch.jobs[0].state === 'done' && !batch.running")
+    batch_report = json.loads((folder/'alternate-dry_V1.report.json').read_text(encoding='utf-8'))
+    assert set(batch_report['stems']) == {'reference_vocal', 'instrumental'}
+    assert all(Path(path).is_file() for path in batch_report['stems'].values())
 
     evidence['passed'] = True
     (OUT/'result.json').write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding='utf-8')

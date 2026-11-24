@@ -74,7 +74,8 @@ def build(report, before_path, output_path, capture=None):
                               output=spectrum(output_path)),
                 source_note='处理前为原始干声与同一分离伴奏的混合，已补偿整体位置；不是原唱成品。')
     options = report.get('options', {})
-    metrics['visual'] = dict(schema=1, title=Path(report.get('song', output_path)).stem,
+    source = report.get('song') or report.get('reference_vocal') or output_path
+    metrics['visual'] = dict(schema=1, title=Path(source).stem,
         **report_analysis.results(report, capture),
         mix=dict(before=report_analysis.stereo_scope(before_path), after=report_analysis.stereo_scope(output_path)),
         processing=dict(pitch=options.get('strength', 0) > 0,
@@ -113,6 +114,7 @@ def summary_rows(report, metrics):
         rhythm_text = '未得到节奏统计'
     rows = [
         ('程序版本', report.get('app_version', '旧报告未记录')),
+        *( [('曲风预设', f"{options['genre_preset']}（独立配方）")] if options.get('genre_preset') else [] ),
         ('修音力度', f"{options.get('strength', 0) * 100:.0f}%"),
         ('平均音高修正量', _value(align.get('mean_abs_shift_cents'), ' 音分')),
         ('参考匹配置信度', _value(align.get('mean_confidence'), '', 2)),
@@ -121,6 +123,8 @@ def summary_rows(report, metrics):
         ('削波修复', '已应用' if declip.get('applied') else ('关闭' if declip.get('disabled') else '未检测到明显削波')),
         ('处理时间', _value(report.get('elapsed_seconds'), ' 秒')),
     ]
+    if lyrics := report.get('lyrics'):
+        rows.append(('LRC 歌词', lyrics['detail']))
     separation = report.get('dry_separation')
     if separation:
         status = '复用缓存' if separation.get('cache_hit') else '已分离'

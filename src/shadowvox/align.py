@@ -225,7 +225,8 @@ def _banded_dtw(c_dry, c_ref, v_dry, v_ref, band_frames, diag_prior=0.03):
 
 def estimate_shift(dry_f0, ref_f0, strength=1.0, max_shift_cents=700.0,
                    smooth_ms=0.0, band_seconds=0.30, offset_override=None,
-                   pitch_mode="frame", reference_times=None, reference_valid=None, register_detail=0.):
+                   pitch_mode="frame", reference_times=None, reference_valid=None, register_detail=0.,
+                   large_note_limit_cents=None):
     nd = len(dry_f0)
     if nd == 0 or len(ref_f0) == 0:
         raise ValueError("音高曲线为空")
@@ -260,7 +261,11 @@ def estimate_shift(dry_f0, ref_f0, strength=1.0, max_shift_cents=700.0,
     ref_c = cent(ref_f0)
     safe_map = np.clip(np.where(np.isfinite(ref_map), ref_map, 0.), 0, len(ref_f0)-1)
     idx = np.rint(safe_map).astype(np.int64)
-    target = ref_c[idx]
+    lo_idx = np.floor(safe_map).astype(np.int64)
+    hi_idx = np.minimum(lo_idx + 1, len(ref_f0) - 1)
+    frac = safe_map - lo_idx
+    both_voiced = (ref_f0[lo_idx] > 0) & (ref_f0[hi_idx] > 0)
+    target = np.where(both_voiced, ref_c[lo_idx] * (1. - frac) + ref_c[hi_idx] * frac, ref_c[idx])
     dry_voiced = dry_f0 > 0
     reference_voiced = ref_f0[idx] > 0
     voiced = dry_voiced & reference_voiced
@@ -278,14 +283,18 @@ def estimate_shift(dry_f0, ref_f0, strength=1.0, max_shift_cents=700.0,
 
     register_stats = {}
     if pitch_mode == "register":
+        limit_kwargs = ({} if large_note_limit_cents is None
+                        else {'large_note_limit_cents': float(large_note_limit_cents)})
         if trusted is None:
             from .register import register_shift
             shift, reliable, octave = register_shift(dry_c, target, voiced, strength,
-                                                      min(max_shift_cents, 450), register_detail)
+                                                      min(max_shift_cents, 450), register_detail,
+                                                      **limit_kwargs)
         else:
             from .register import correspondence_shift
             shift, reliable, octave, coverage = correspondence_shift(
-                dry_c, target, voiced, strength, min(max_shift_cents, 450), register_detail)
+                dry_c, target, voiced, strength, min(max_shift_cents, 450), register_detail,
+                **limit_kwargs)
             coverage.update(voiced_input_frames=int(dry_voiced.sum()),
                             unmatched_reference_frames=int((dry_voiced & ~trusted).sum()),
                             reference_unvoiced_frames=int((dry_voiced & trusted & ~reference_voiced).sum()),
@@ -322,7 +331,88 @@ def estimate_shift(dry_f0, ref_f0, strength=1.0, max_shift_cents=700.0,
                        offset_seconds=offset, stats=stats)
 
 
-def _pitch_reference_map(d10, r10, nd, offset, band_seconds):
+def augment_pitch_correspondence(dry_f0, ref_f0, reference_times, reference_valid,
+                                 band_seconds=0.10, fps=F0_FPS):
+    """在已对齐时间轴上，为歌词漏识但旋律明确吻合的唱段补充安全的声学音高对应。
+
+    绝不覆盖已有的音素对应帧；仅在乐句级同唱率与八度折叠后音准一致性均达标时启用，
+    且严格维持参考时标单调性。
+    """
+    nd, nr = len(dry_f0), len(ref_f0)
+    times = np.asarray(reference_times, dtype=np.float64).copy()
+    valid = np.asarray(reference_valid, dtype=bool).copy()
+    if nd < 20 or nr < 20:
+        return times, valid, 0
+    d10 = _decimate(dry_f0, fps, COARSE_FPS)
+    r10 = _decimate(ref_f0, fps, COARSE_FPS)
+    if len(d10) < 4 or len(r10) < 4:
+        return times, valid, 0
+    try:
+        ref_map = _pitch_reference_map(d10, r10, nd, 0.0, band_seconds, diag_prior=0.08)
+    except ValueError:
+        return times, valid, 0
+
+    # 用已有音素锚点作为上下界夹紧，保证回退路径与已有锚点严格单调衔接。
+    anchor_idx = np.flatnonzero(valid)
+    if anchor_idx.size:
+        anchor_frames = times[anchor_idx] * fps
+        pos = np.searchsorted(anchor_idx, np.arange(nd))
+        lo_bound = np.where(pos > 0, anchor_frames[np.maximum(0, pos - 1)], 0.0)
+        hi_bound = np.where(pos < len(anchor_idx), anchor_frames[np.minimum(len(anchor_idx) - 1, pos)], float(nr - 1))
+        ref_map = np.clip(ref_map, lo_bound, np.maximum(lo_bound, hi_bound))
+    ref_map = np.clip(ref_map, 0.0, float(nr - 1))
+
+    dry_voiced = dry_f0 > 0
+    voiced_idx = np.flatnonzero(dry_voiced)
+    if voiced_idx.size < 15:
+        return times, valid, 0
+    ref_idx = np.rint(ref_map).astype(np.int64)
+    ref_voiced = ref_f0[ref_idx] > 0
+    dry_c = cent(dry_f0)
+    ref_c = cent(ref_f0)
+
+    added = 0
+    # 250ms 以上静音切分乐句，逐句核验声学旋律证据。
+    breaks = np.r_[0, np.flatnonzero(np.diff(voiced_idx) > int(0.25 * fps)) + 1, len(voiced_idx)]
+    for a, b in zip(breaks[:-1], breaks[1:]):
+        active = voiced_idx[a:b]
+        if len(active) < 15:
+            continue
+        unmatched = active[~valid[active]]
+        if len(unmatched) < 10:
+            continue
+        # 若该句几乎全已被音素覆盖则无需回退。
+        co_voiced = active[ref_voiced[active]]
+        if len(co_voiced) < max(12, int(0.45 * len(active))):
+            continue
+        diff = dry_c[co_voiced] - ref_c[ref_idx[co_voiced]]
+        phrase_octave = float(np.rint(np.median(diff) / 1200.0))
+        folded = np.abs(diff - 1200.0 * phrase_octave)
+        # 严格旋律一致门限：排除说话、串曲、伴奏间奏和错段，仅放行真实同旋律走音唱段。
+        if float(np.median(folded)) > 220.0 or float(np.mean(folded <= 300.0)) < 0.55:
+            continue
+        # 句内只接收同时有声且非剧烈换音瞬态的未匹配帧，避免换音时差产生伪移调尖峰。
+        dry_jump = np.abs(np.diff(dry_c, prepend=dry_c[0])) > 65.0
+        ref_jump = np.abs(np.diff(ref_c, prepend=ref_c[0])) > 65.0
+        stable = ~(dry_jump | ref_jump[ref_idx])
+        cand = unmatched[ref_voiced[unmatched] & stable[unmatched]]
+        if not cand.size:
+            continue
+        times[cand] = ref_map[cand] / fps
+        valid[cand] = True
+        added += int(cand.size)
+
+    # 最终单调性守卫：确保新增帧不会破坏时间递增。
+    if added:
+        furthest = np.maximum.accumulate(np.where(valid, times, -np.inf))
+        bad = valid & (times < furthest - 1e-6)
+        if bad.any():
+            valid[bad] = False
+            added = max(0, added - int(bad.sum()))
+    return times, valid, added
+
+
+def _pitch_reference_map(d10, r10, nd, offset, band_seconds, diag_prior=0.03):
     """没有独立对应路径时，沿用原有 F0 匹配。"""
     fps = COARSE_FPS
     lag_frames = int(round(offset * fps))
@@ -338,7 +428,7 @@ def _pitch_reference_map(d10, r10, nd, offset, band_seconds):
 
     c_d, c_r = cent(d10[j0:j1]), cent(r10[j0 - lag_frames: j1 - lag_frames])
     v_d, v_r = d10[j0:j1] > 0, r10[j0 - lag_frames: j1 - lag_frames] > 0
-    local_map = _banded_dtw(c_d, c_r, v_d, v_r, band_frames=band_seconds * fps)
+    local_map = _banded_dtw(c_d, c_r, v_d, v_r, band_frames=band_seconds * fps, diag_prior=diag_prior)
 
     # 拼成干声域（10fps）的全局映射：dry_idx -> ref_idx
     # 段内下标 a = j - j0；DTW 返回的 local_map[a] 已是段内 ref 下标，

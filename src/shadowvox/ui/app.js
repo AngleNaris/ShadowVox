@@ -62,7 +62,8 @@ const HELP = [
   ['美化', '调节人声本身的音色和动态，联动低切、均衡、双级压缩、去齿音和增厚。'],
   ['融合', '联动混响、延时和伴奏避让。演唱时给人声腾出空间，高档更容易听到句尾混响。'],
   ['比例', '调节人声相对伴奏的前后位置，范围为 −6 到 +6 dB。中点为平衡，靠前 35 对应 +2.1 dB。'],
-  ['混音', '调节人声和伴奏合成后的多段压缩密度。整曲导出固定以 −8 LUFS-I 为目标，真峰值上限为 −0.5 dBTP。持续限幅过重时会保留更多动态，实际响度可能较低。关闭后期总开关时也会执行母带。'],
+  ['混音', '调节人声和伴奏合成后的多段压缩密度。手动模式整曲导出固定以 −8 LUFS-I / −1.0 dBTP 为目标；持续限幅过重时会保留更多动态。'],
+  ['曲风预设', '曲风预设打破五轴联动，采用针对各曲风独立定制的修音、均衡、动态、空间、避让与母带配方。启用曲风预设时手动面板自动禁用，可随时点击「切回手动调节」恢复手动滑杆。'],
   ['旧设置', '读数显示「旧设置」时使用原来保存的参数。调整某一项后，该项改用联动参数。'],
 ];
 const AUDITION = '拖动方形调节点可同时调整两轴，也可按 Tab 选中一项，再用方向键微调。开启「实时预览」后，调参会在后台更新播放位置附近的草稿。要保存新设置，请再次生成成品。';
@@ -75,7 +76,8 @@ function snapTo(v, d) {
   v = Number(v); if (!Number.isFinite(v)) v = d.def;
   return +clamp(Math.round((v - d.min) / d.step) * d.step + d.min, d.min, d.max).toFixed(4);
 }
-const params = () => ({ ...P, ...SW, ...legacy, dry_has_backing: switchOn($('#dry-has-backing')) });
+const params = () => ({ ...P, ...SW, ...legacy, genre_preset: activeGenre, dry_has_backing: switchOn($('#dry-has-backing')) });
+const saveOptions = () => Object.fromEntries($$('[data-save-option]').map(input => [input.dataset.saveOption, input.checked]));
 
 /* ═══ 监听音量：上下拖动、滚轮、方向键、双击复位 ═══ */
 function makeKnob(el, d, value, onChange) {
@@ -122,6 +124,7 @@ const soundValue = key => hasLegacy(key) ? '旧设置' : PARAMS[key].fmt(P[key])
 const soundFraction = key => (P[key] - PARAMS[key].min) / (PARAMS[key].max - PARAMS[key].min);
 
 function setSound(values, reset = false) {
+  if (activeGenre) return;
   let edited = false, legacyEdited = false;
   for (const [key, input] of Object.entries(values)) {
     if (soundInput(key).disabled) continue;
@@ -188,7 +191,7 @@ function bindXY(field) {
       [y]: at(y, (r.bottom - e.clientY + drag.dy) / r.height) });
   };
   field.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || drag) return;
+    if (activeGenre || e.button !== 0 || drag) return;
     const hit = point.contains(e.target), r = point.getBoundingClientRect();
     drag = { id: e.pointerId, dx: hit ? e.clientX - r.left - r.width / 2 : 0,
       dy: hit ? e.clientY - r.top - r.height / 2 : 0 };
@@ -204,7 +207,7 @@ function bindXY(field) {
   const endPointerFocus = () => field.classList.remove('is-pointer-focused');
   field.addEventListener('keydown', endPointerFocus);
   field.addEventListener('focusout', endPointerFocus);
-  field.addEventListener('dblclick', () => setSound({ [x]: PARAMS[x].def, [y]: PARAMS[y].def }, true));
+  field.addEventListener('dblclick', () => { if (!activeGenre) setSound({ [x]: PARAMS[x].def, [y]: PARAMS[y].def }, true); });
 }
 
 function buildRacks() {
@@ -213,7 +216,15 @@ function buildRacks() {
     <div class="rack-head"><h2 class="rack-title" id="sound-title">声音处理</h2><span class="spacer"></span>
       <button class="key" type="button" data-help="sound" title="声音处理说明" aria-label="声音处理说明" aria-haspopup="dialog"><svg class="i"><use href="#i-help"/></svg></button>
       <button class="key key-labeled" type="button" role="switch" data-switch="mix_effects" title="开关美化、融合、混音" aria-controls="sound-beauty sound-fusion sound-mixdown"><svg class="i"><use href="#i-power"/></svg><span>后期总开关</span></button>
-    </div><div class="rack-body">
+    </div>
+    <div class="genre-banner" id="genre-banner" hidden>
+      <div class="genre-banner-info">
+        <span class="genre-banner-title" id="genre-banner-title"></span>
+        <span class="genre-banner-desc" id="genre-banner-desc"></span>
+      </div>
+      <button class="key key-labeled" id="genre-unlock" type="button">切回手动调节</button>
+    </div>
+    <div class="rack-body">
       ${xyMarkup('correction', 'beauty')}${xyMarkup('ratio', 'fusion')}
       <div class="mix-row"><label class="axis-label" for="sound-mixdown">混音</label>
         <div class="mix-fader">
@@ -236,35 +247,50 @@ function buildRacks() {
     fader.classList.toggle('is-over-thumb', Math.abs(e.clientX - center) <= half);
   });
   mix.addEventListener('pointerleave', () => fader.classList.remove('is-over-thumb'));
-  mix.addEventListener('dblclick', () => setSound({ mixdown: PARAMS.mixdown.def }, true));
+  mix.addEventListener('dblclick', () => { if (!activeGenre) setSound({ mixdown: PARAMS.mixdown.def }, true); });
   $('[data-switch=mix_effects]', root).addEventListener('click', () => {
+    if (activeGenre) return;
     SW.mix_effects = !SW.mix_effects;
     store.set('switch_mix_effects', SW.mix_effects);
     paint(); changed();
   });
+  $('#genre-unlock', root).addEventListener('click', () => setActiveGenre(''));
   $('[data-help]', root).addEventListener('click', e => toggleHelp(e.currentTarget));
 }
 
 function paint() {
-  $('[data-switch=mix_effects]').setAttribute('aria-checked', String(SW.mix_effects));
+  const locked = Boolean(activeGenre);
+  const rack = $('[data-rack="sound"]');
+  rack.classList.toggle('is-genre-locked', locked);
+  const banner = $('#genre-banner');
+  banner.hidden = !locked;
+  if (locked) {
+    $('#genre-banner-title').textContent = `曲风预设：${activeGenre}（独立配方 · 手动面板已禁用）`;
+    $('#genre-banner-desc').textContent = GENRE_PRESETS[activeGenre]?.summary ?? '';
+  }
+  const postSwitch = $('[data-switch=mix_effects]');
+  postSwitch.setAttribute('aria-checked', String(locked ? true : SW.mix_effects));
+  postSwitch.disabled = locked;
   for (const [key, d] of Object.entries(PARAMS)) {
     const input = soundInput(key);
     input.value = P[key];
-    input.disabled = !!d.post && !SW.mix_effects;
-    input.setAttribute('aria-valuetext', soundValue(key));
+    input.disabled = locked || (!!d.post && !SW.mix_effects);
+    input.setAttribute('aria-valuetext', locked ? `${activeGenre}预设控制` : soundValue(key));
     $(`label[for="${input.id}"]`).classList.toggle('is-disabled', input.disabled);
   }
   for (const field of $$('.xy-field')) {
     const { x, y } = field.dataset;
     field.style.setProperty('--x', `${100 * soundFraction(x)}%`);
     field.style.setProperty('--y', `${100 * (1 - soundFraction(y))}%`);
-    field.classList.toggle('is-x-only', soundInput(y).disabled);
+    field.classList.toggle('is-preset-locked', locked);
+    field.classList.toggle('is-x-only', !locked && soundInput(y).disabled);
     field.classList.toggle('is-tip-below', soundFraction(y) > .82);
     $('.xy-tip', field).textContent = soundInput(y).disabled ? soundValue(x) : `↔ ${soundValue(x)}  ↕ ${soundValue(y)}`;
   }
   const fader = soundInput('mixdown').parentElement;
   fader.style.setProperty('--fill', `${100 * soundFraction('mixdown')}%`);
   $('.mix-tip', fader).textContent = soundValue('mixdown');
+  renderGenrePresets();
 }
 
 /* 参数变化：已有成品时交给后台更新草稿 */
@@ -272,9 +298,31 @@ function changed() {
   if (state.ready && !run.busy && switchOn($('#live-preview'))) bridge?.draft(params());
 }
 
-/* ═══ 预设：9 槽；左键空槽保存、左键已存槽应用；右键已存槽待确认（再右键删除、左键覆盖），4 秒自动取消；不存路径 ═══ */
+/* ═══ 预设：9 槽保存手动参数；曲风预设启用独立专业配方并锁定手动面板 ═══ */
 const PRESET_ARM_MS = 4000;
 let presets = store.get('presets', {}), armed = null, armTimer = 0;
+const GENRE_PRESETS = {
+  '抒情流行': { summary: '稳准自然修音（保留颤音）· 温暖厚实磁性 · 浪漫饱满长尾混响 · 气息平稳贴耳' },
+  '主流流行': { summary: '高稳精修音准 · 大振膜厚润光泽 · 饱满立体声厅堂混响 · 商业单曲响度与靠前质感' },
+  '民谣': { summary: '自然稳准不露馅 · 温暖木质磁性声体 · 亲切温润短空间与平稳气息 · 饱满耐听' },
+  '摇滚': { summary: '高音副歌拉稳有底气 · 厚实冲劲不刮耳 · 演唱会大气厅堂混响 + 强伴奏中频避让' },
+  'R&B': { summary: '稳拉音符中心并护住转音 · 丝绒磁性低频 + 精致空气光泽 · 丝滑宽润现代空间' },
+  '中国风': { summary: '工整优美音准 · 温润清透不单薄 + 丝滑仙气高音 · 空灵厅堂长尾混响与悠远回声' },
+  '舞曲': { summary: '高精准紧致大片修音 · 饱满存在感不被电音盖住 · 句尾华丽抛尾混响与满血响度' },
+  '说唱': { summary: '关闭音高修正 · 保留节奏卡拍、AI 降噪与削波修复 · 磁性贴脸声体 + 紧凑棚感与强避让' },
+};
+let activeGenre = store.get('active_genre', '');
+if (!Object.hasOwn(GENRE_PRESETS, activeGenre)) activeGenre = '';
+const presetSnapshot = () => ({ savedAt: Date.now(), params: { ...P }, switches: { ...SW }, legacy: { ...legacy } });
+function setActiveGenre(genre, silent = false) {
+  const next = Object.hasOwn(GENRE_PRESETS, genre) ? genre : '';
+  if (next === activeGenre) return;
+  activeGenre = next;
+  store.set('active_genre', activeGenre);
+  paint();
+  changed();
+  if (!silent) announce(activeGenre ? `已启用${activeGenre}独立曲风配方，手动面板已禁用` : '已切回手动调节模式');
+}
 function buildPresets() {
   const root = $('#presets');
   for (let n = 1; n <= 9; n++) {
@@ -297,14 +345,19 @@ function renderPresets() {
 function disarm() { clearTimeout(armTimer); armed = null; renderPresets(); }
 function flashPad(n) { const pad = $(`.pad[data-slot="${n}"]`); pad.classList.remove('flash'); void pad.offsetWidth; pad.classList.add('flash'); }
 function savePreset(n) {
-  presets[n] = { savedAt: Date.now(), params: { ...P }, switches: { ...SW }, legacy: { ...legacy } };
+  if (activeGenre) { announce('曲风预设模式下无法保存到手动预设槽，请先切回手动调节'); return; }
+  presets[n] = presetSnapshot();
   store.set('presets', presets); flashPad(n); announce(`已保存预设 ${n}`);
 }
 function presetClick(n) {
   if (armed === n) { disarm(); savePreset(n); renderPresets(); return; }
   disarm();
   if (!presets[n]) { savePreset(n); renderPresets(); return; }
-  const p = presets[n];
+  activeGenre = ''; store.set('active_genre', '');
+  applyPreset(presets[n]); flashPad(n); announce(`已应用手动预设 ${n}`);
+}
+function applyPreset(p) {
+  activeGenre = ''; store.set('active_genre', '');
   const old = { ...p.params, ...p.switches };
   legacy = { ...(p.legacy ?? Object.fromEntries(legacyKeys.filter(k => k in old).map(k => [k, old[k]]))) };
   store.set('legacy_params', legacy);
@@ -314,7 +367,7 @@ function presetClick(n) {
   }
   SW.mix_effects = p.switches?.mix_effects !== false;
   store.set('switch_mix_effects', SW.mix_effects);
-  paint(); changed(); flashPad(n); announce(`已应用预设 ${n}`);
+  paint(); changed();
 }
 function presetArm(n) {
   if (!presets[n]) return;
@@ -322,24 +375,63 @@ function presetArm(n) {
   disarm(); armed = n; renderPresets(); armTimer = setTimeout(disarm, PRESET_ARM_MS);
 }
 
+function renderGenrePresets() {
+  $$('#genre-list .menu-item').forEach(item => item.setAttribute('aria-pressed', String(item.dataset.genre === activeGenre)));
+  const btn = $('#genre-button'), label = $('#genre-button-label');
+  if (btn) btn.dataset.active = String(Boolean(activeGenre));
+  if (label) label.textContent = activeGenre ? `曲风 · ${activeGenre}` : '曲风';
+  const manual = $('#genre-manual');
+  if (manual) manual.disabled = !activeGenre;
+}
+function bindGenrePresets() {
+  const menu = $('#genre-menu'), button = $('#genre-button');
+  for (const [genre, info] of Object.entries(GENRE_PRESETS)) {
+    const item = document.createElement('button');
+    item.type = 'button'; item.className = 'menu-item'; item.dataset.genre = genre;
+    item.textContent = genre; item.title = info.summary;
+    item.addEventListener('click', () => {
+      disarm();
+      setActiveGenre(activeGenre === genre ? '' : genre);
+      menu.hidePopover();
+    });
+    $('#genre-list').appendChild(item);
+  }
+  menu.addEventListener('toggle', event => {
+    const open = event.newState === 'open';
+    button.setAttribute('aria-expanded', String(open));
+    if (open) ($('[aria-pressed="true"]', menu) || $('.menu-item', menu)).focus();
+  });
+  $('#genre-manual').addEventListener('click', () => {
+    disarm(); setActiveGenre(''); menu.hidePopover();
+  });
+  renderGenrePresets();
+}
+
 /* ═══ 输入文件与输出目录 ═══ */
-const inputs = { song: '', dry: '' };
+const inputs = { song: '', dry: '', lyrics: '' };
+const inputLabels = { song: '原曲', dry: '演唱干音', lyrics: '原唱 LRC 歌词（可选）' };
+const inputPlaceholders = { song: '原曲', dry: '干音', lyrics: 'LRC' };
 function setChip(kind, name) {
-  const chip = $(`.chip[data-kind="${kind}"]`), label = kind === 'song' ? '原曲' : '演唱干音';
-  chip.dataset.filled = !!name; $('.mq', chip).textContent = name || (kind === 'song' ? '原曲' : '干音');
+  const chip = $(`.chip[data-kind="${kind}"]`), label = inputLabels[kind];
+  chip.dataset.filled = !!name; $('.mq', chip).textContent = name || inputPlaceholders[kind];
   chip.setAttribute('aria-label', `${label}：${name || '未选择'}`); chip.title = name ? `${label}：${name}` : `${label}（可拖入）`;
+  if (kind === 'lyrics') $('#clear-lyrics').hidden = !name;
 }
 async function chooseInput(kind, path) {
   if (run.busy) return;
-  const res = path ? await call('setInput', kind, path) : await call('pickAudio', kind);
+  const res = path === undefined ? await call('pickAudio', kind) : await call('setInput', kind, path);
   if (!res) return;
-  const { path: full, name } = JSON.parse(res);
+  const { path: full, name, cleared_lyrics } = JSON.parse(res);
   if (kind === 'dry') {
     const option = $('#dry-has-backing');
     if (inputs.dry !== full) option.setAttribute('aria-checked', 'false');
     option.disabled = false;
   }
   inputs[kind] = full; setChip(kind, name); resetResult();
+  if (cleared_lyrics || (kind === 'lyrics' && !full)) {
+    inputs.lyrics = ''; setChip('lyrics', ''); announce('已移除 LRC 歌词');
+    if (kind === 'lyrics') $('#in-lyrics').focus();
+  }
 }
 function setOutput(path) {
   store.set('output', path);
@@ -375,9 +467,10 @@ function notches(stage, kind = 'run') {
 function setBusy(on) {
   run.busy = on; const go = $('#go');
   go.classList.toggle('running', on); go.classList.remove('settled');
-  for (const el of [$('#racks'), $('#presets'), $('#out-card'), ...$$('.chip, .dry-option')]) el.inert = on;
+  for (const el of [$('#racks'), $('#preset-tools'), $('#out-card'), ...$$('.chip, .dry-option, .lyrics-remove')]) el.inert = on;
   $('#racks').classList.toggle('is-locked', on);
   if (on) {
+    $('#genre-menu').hidePopover();
     Object.assign(run, { cancelling: false, stage: 0, frac: -1, label: '准备处理', last: performance.now(), shown: 0, started: performance.now() });
     go.style.setProperty('--p', 0); notches(0); goContent('#i-stop', '停止'); go.setAttribute('aria-label', '停止处理');
     fx(true); requestAnimationFrame(progressFrame);
@@ -410,7 +503,7 @@ async function onGo() {
   if (missing) { markNeed(missing); return; }
   const out = store.get('output', '');
   if (!out || !(await call('folderExists', out))) { markNeed($('#out-card')); return; }
-  if (await call('process', { ...params(), output: out })) setBusy(true);
+  if (await call('process', { ...params(), ...saveOptions(), output: out })) setBusy(true);
 }
 function onStage(index, frac, label) {
   if (!run.busy) return;
@@ -421,13 +514,14 @@ function onFinished(json) {
   const data = JSON.parse(json), go = $('#go');
   run.busy = false; run.settling = true; go.classList.add('settled');
   go.style.setProperty('--p', 1); notches(6, 'done'); go.disabled = true;
-  goContent('#i-check', `V${data.report.version}`, '已保存');
-  announce(`已生成并保存 ${data.report.name}`);
+  const lyricsFallback = data.lyrics?.status === 'fallback';
+  goContent('#i-check', `V${data.report.version}`, lyricsFallback ? '已保存 · LRC 未采用' : '已保存');
+  announce(`已生成并保存 ${data.report.name}${lyricsFallback ? '。' + data.lyrics.detail : ''}`);
   versions = data.versions; current = data.report.version;
   state.ready = true; renderVersions(); renderReport(data.report, 'reveal');
   // 完成后停顿一拍再复位，防止连点误触
   setTimeout(() => { run.settling = false; go.classList.remove('settled'); setBusy(false); }, 1300);
-  for (const el of [$('#racks'), $('#presets'), $('#out-card'), ...$$('.chip, .dry-option')]) el.inert = false;
+  for (const el of [$('#racks'), $('#preset-tools'), $('#out-card'), ...$$('.chip, .dry-option, .lyrics-remove')]) el.inert = false;
   fx(false);
 }
 function onFailed(json) {
@@ -838,6 +932,10 @@ function bindSettings() {
     bridge.checkUpdate();
   });
   $('#open-update').addEventListener('click', () => bridge?.openUpdatePage());
+  for (const input of $$('[data-save-option]')) {
+    input.checked = store.get(input.dataset.saveOption, false) === true;
+    input.addEventListener('change', () => store.set(input.dataset.saveOption, input.checked));
+  }
   $('#btn-settings').addEventListener('click', async () => {
     openModal($('#settings'), $('#btn-settings'));
     if (bridge) {
@@ -978,7 +1076,7 @@ function bindBatch() {
     for (const job of batch.jobs) Object.assign(job, { state: 'pending', error: '', output: '', html: '' });
     setBusy(true); status.textContent = '准备处理…'; renderBatch();
     const jobs = batch.jobs.map(({ dry, song, dry_has_backing }) => ({ dry, song, dry_has_backing }));
-    if (!(await call('processBatch', jobs, { ...params(), output: out }))) {
+    if (!(await call('processBatch', jobs, { ...params(), ...saveOptions(), output: out }))) {
       batch.running = false; setBusy(false); status.textContent = '当前无法启动批处理。';
       renderBatch();
     }
@@ -990,18 +1088,20 @@ function bindBatch() {
 function onDrop(json) {
   const { paths, x, y } = JSON.parse(json), el = document.elementFromPoint(x, y);
   if (run.busy) { announce('处理中不能更换文件'); return; }
+  const lyrics = paths.find(p => /\.lrc$/i.test(p));
+  if (lyrics && el?.closest('.song-input')) { chooseInput('lyrics', lyrics); return; }
   const chip = el?.closest('.chip') || el?.closest('.dry-input')?.querySelector('.chip');
   const audioPaths = paths.filter(p => /\.(wav|mp3|flac|m4a|aac|ogg|aiff|wma)$/i.test(p));
   if (audioPaths.length && (el?.closest('#batch-dialog, #btn-batch') || (chip?.dataset.kind === 'dry' && audioPaths.length > 1))) {
     addBatchFiles(audioPaths); openBatch(); return;
   }
   const audio = audioPaths[0];
-  if (chip && audio) { chooseInput(chip.dataset.kind, audio); return; }
+  if (chip && audio && chip.dataset.kind !== 'lyrics') { chooseInput(chip.dataset.kind, audio); return; }
   if (el?.closest('#out-card')) {
     const dir = paths.find(p => !/\.[a-z0-9]{2,4}$/i.test(p));
     if (dir) { setOutput(dir); return; }
   }
-  announce('请把音频拖到原曲或干音框，把文件夹拖到输出目录');
+  announce('请把音频拖到原曲或干音框，把歌词拖到 LRC，把文件夹拖到输出目录');
 }
 
 /* ═══ 处理特效：粉色方形粒子缓慢上升；开始淡入，结束沿原路淡出 ═══ */
@@ -1045,9 +1145,10 @@ window.__svState = () => ({ correction: P.correction,
 
 /* ═══ 启动 ═══ */
 function init() {
-  buildRacks(); buildPresets(); paint();
-  setChip('song', ''); setChip('dry', ''); setOutput(store.get('output', ''));
+  buildRacks(); buildPresets(); bindGenrePresets(); paint();
+  setChip('song', ''); setChip('dry', ''); setChip('lyrics', ''); setOutput(store.get('output', ''));
   $$('.chip').forEach(chip => { chip.addEventListener('click', () => chooseInput(chip.dataset.kind)); bindMarquee(chip); });
+  $('#clear-lyrics').addEventListener('click', () => chooseInput('lyrics', ''));
   $('#dry-has-backing').addEventListener('click', ({ currentTarget }) => {
     currentTarget.setAttribute('aria-checked', String(!switchOn(currentTarget)));
     bridge?.invalidate();

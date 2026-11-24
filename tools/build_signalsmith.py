@@ -25,18 +25,18 @@ def _compiler_setup():
     raise RuntimeError('请安装带 C++ 桌面开发组件的 Visual Studio Build Tools')
 
 
-def build():
+def build(output=OUTPUT):
     setup = _compiler_setup()
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=OUTPUT.parent, prefix='build-') as directory:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output.parent, prefix='build-') as directory:
         folder = Path(directory)
         compiler = (f'cl /nologo /std:c++17 /O2 /MT /EHsc /DNDEBUG '
                     f'/I"{SOURCE}/third_party/stretch" /I"{SOURCE}/third_party/linear/include" '
-                    f'"{SOURCE}/stretch.cpp" /Fe:{OUTPUT.name}')
+                    f'"{SOURCE}/stretch.cpp" /Fe:{output.name}')
         (folder/'build.cmd').write_text('@echo off\n'+setup+compiler+'\n', encoding='mbcs')
         subprocess.run(['cmd.exe', '/d', '/c', 'build.cmd'], cwd=folder, check=True)
-        (folder/OUTPUT.name).replace(OUTPUT)
-    return OUTPUT
+        (folder/output.name).replace(output)
+    return output
 
 
 if __name__ == '__main__':

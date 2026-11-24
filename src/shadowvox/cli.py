@@ -5,7 +5,12 @@ import sys
 from pathlib import Path
 
 from . import AUTHOR, __version__
-from .pipeline import Options, run
+from .pipeline import Options, run, validate_reference
+
+
+def add_stem_arguments(parser):
+    parser.add_argument('--reference-vocal', help='已分离的原唱人声（与 --instrumental 同用）')
+    parser.add_argument('--instrumental', help='同一时间轴上的伴奏（与 --reference-vocal 同用）')
 
 
 def main(argv=None):
@@ -19,7 +24,8 @@ def main(argv=None):
     )
     ap.add_argument('--version', action='version', version=f'ShadowVox {__version__} · {AUTHOR}')
     ap.add_argument("dry", help="干声文件（wav/mp3/flac…）")
-    ap.add_argument("song", help="原曲成品（含伴奏与人声）")
+    ap.add_argument("song", nargs='?', help="原曲成品（含伴奏与人声）")
+    add_stem_arguments(ap)
     ap.add_argument("-o", "--out", help="输出成品路径（默认 out/<干声名>_autotuned.wav）")
     ap.add_argument("--strength", type=float, default=0.85,
                     help="修正力度 0~1，默认 0.85")
@@ -51,6 +57,10 @@ def main(argv=None):
     ap.add_argument("--work", help="工作目录（分离缓存）")
     ap.add_argument("-q", "--quiet", action="store_true")
     a = ap.parse_args(argv)
+    try:
+        validate_reference(a.song, a.reference_vocal, a.instrumental)
+    except ValueError as exc:
+        ap.error(str(exc))
     if a.master_density is not None and (not a.mix_effects or not 0. <= a.master_density <= 1.):
         ap.error('--master-density 需要 --mix-effects，范围为 0..1')
 
@@ -74,7 +84,8 @@ def main(argv=None):
         mute_reference_gaps=a.mute_reference_gaps,
     )
     try:
-        report = run(a.dry, a.song, a.out, a.work, opts, log=log)
+        report = run(a.dry, a.song, a.out, a.work, opts, log=log,
+                     reference_vocal=a.reference_vocal, instrumental=a.instrumental)
     except Exception as e:
         print(f"失败: {e}", file=sys.stderr)
         return 1
@@ -115,16 +126,21 @@ def desktop_cli(argv):
         return int(result['state'] in ('error', 'limited', 'unavailable'))
     if mode == 'desktop':
         ap.add_argument('dry', help='演唱干音')
-        ap.add_argument('song', help='含原唱和伴奏的原曲')
+        ap.add_argument('song', nargs='?', help='含原唱和伴奏的原曲')
+        ap.add_argument('--lyrics', type=Path, help='对应原曲版本的可选 LRC 歌词')
     else:
-        ap.add_argument('dry', nargs='*', help='使用同一原曲的多个干音')
+        ap.add_argument('dry', nargs='*', help='共用参考音频的多个干音')
         ap.add_argument('--song', help='为多个干音指定同一首原曲')
-        ap.add_argument('--manifest', type=Path, help='JSON 任务数组，每条包含 dry、song，可带 dry_has_backing')
+        ap.add_argument('--manifest', type=Path, help='JSON 任务数组，每条包含 dry，以及 song 或 reference_vocal 和 instrumental')
+    add_stem_arguments(ap)
     ap.add_argument('-o', '--output-dir', required=True, type=Path, help='版本化 WAV 和报告的输出目录')
     ap.add_argument('--work', help='工作目录（分离缓存）')
     ap.add_argument('--quiet', action='store_true', help='省略处理进度')
     ap.add_argument('--no-post', dest='mix_effects', action='store_false', help='关闭后期总开关')
     ap.add_argument('--dry-has-backing', action='store_true', help='先分离干音中混入的伴奏')
+    from .presets import GENRE_NAMES
+    ap.add_argument('--genre', choices=GENRE_NAMES, default='',
+                    help='启用独立曲风配方（绕过五轴手动滑杆）')
     for key, title in (('correction', '修正'), ('beauty', '美化'), ('fusion', '融合'),
                        ('ratio', '比例'), ('mixdown', '混音')):
         ap.add_argument('--'+key, type=int, default=DEFAULT_PARAMS[key], metavar='-100..100' if key == 'ratio' else '0..100',
@@ -134,28 +150,41 @@ def desktop_cli(argv):
         if not (-100 if key == 'ratio' else 0) <= getattr(a, key) <= 100:
             ap.error(f'--{key} 超出范围')
     params = {key: getattr(a, key) for key in DEFAULT_PARAMS}
-    if mode == 'desktop':
-        items = [dict(dry=a.dry, song=a.song)]
-    elif a.manifest:
-        if a.song or a.dry:
-            ap.error('--manifest 与 --song、干音参数互斥')
+    if a.genre:
+        params['genre_preset'] = a.genre
+    if mode == 'desktop' and a.lyrics:
+        params['lyrics_path'] = a.lyrics
+    reference_keys = ('song', 'reference_vocal', 'instrumental')
+    reference = {key: getattr(a, key) for key in reference_keys if getattr(a, key) is not None}
+    if mode == 'batch' and a.manifest:
+        if reference or a.dry:
+            ap.error('--manifest 与命令行上的音频路径互斥')
         try:
             items = json.loads(a.manifest.read_text(encoding='utf-8-sig'))
             if not isinstance(items, list) or not items:
                 raise ValueError('需要非空 JSON 数组')
             for item in items:
-                if not isinstance(item, dict) or any(not isinstance(item.get(k), str) or not item[k] for k in ('dry', 'song')):
-                    raise ValueError('每条任务需要 dry 和 song 路径')
+                if not isinstance(item, dict) or 'dry' not in item:
+                    raise ValueError('每条任务需要 dry 路径和参考音频')
+                paths = [key for key in ('dry', *reference_keys) if key in item]
+                if any(not isinstance(item[key], str) or not item[key] for key in paths):
+                    raise ValueError('音频路径必须是非空字符串')
+                validate_reference(*(item.get(key) for key in reference_keys))
                 if 'dry_has_backing' in item and not isinstance(item['dry_has_backing'], bool):
                     raise ValueError('dry_has_backing 必须是布尔值')
-                for key in ('dry', 'song'):
+                for key in paths:
                     item[key] = str(a.manifest.resolve().parent/item[key])
         except (OSError, ValueError) as exc:
             ap.error(f'任务清单无效：{exc}')
     else:
-        if not a.song or not a.dry:
-            ap.error('请提供 --manifest，或指定 --song 和干音文件')
-        items = [dict(dry=dry, song=a.song) for dry in a.dry]
+        if not a.dry:
+            ap.error('请提供 --manifest，或指定干音和参考音频')
+        try:
+            validate_reference(a.song, a.reference_vocal, a.instrumental)
+        except ValueError as exc:
+            ap.error(str(exc))
+        dry_paths = [a.dry] if mode == 'desktop' else a.dry
+        items = [dict(dry=dry, **reference) for dry in dry_paths]
     log = (lambda _: None) if a.quiet else (lambda message: print(message, flush=True))
 
     def show(result):

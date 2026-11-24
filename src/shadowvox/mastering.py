@@ -14,7 +14,7 @@ from .density import densify
 from .vst_worker import render_isolated
 
 TARGET_LUFS = -8.0
-TRUE_PEAK_CEILING = -0.5
+TRUE_PEAK_CEILING = -1.0
 MAX_MEDIAN_REDUCTION_DB = 3.2
 LOUDNESS_TOLERANCE = .15
 LIMITER = C.ROOT/'plugins/ZL Limiter.vst3/Contents/x86_64-win/ZL Limiter.vst3'
@@ -60,13 +60,13 @@ def _sections(mixed, sr):
     return np.interp(np.arange(mixed.shape[-1]), centers, severity).astype(np.float32)
 
 
-def _limit(mixed, sr, gain):
+def _limit(mixed, sr, gain, ceiling=TRUE_PEAK_CEILING):
     from pedalboard import load_plugin
 
     if not LIMITER.is_file():
         raise RuntimeError('缺少 ZL Limiter 0.0.1，请运行 python tools/fetch_zl.py 或使用完整安装包')
     limiter = load_plugin(str(LIMITER))
-    limiter.output_ceiling_output_ceiling = TRUE_PEAK_CEILING
+    limiter.output_ceiling_output_ceiling = float(ceiling)
     limiter.true_peak_true_peak = True
     limiter.oversampling_oversampling = '4x'
     limiter.channel_delta_channel_delta = 0.0
@@ -84,12 +84,15 @@ def _window_power(mixed, hop, count):
     return np.einsum('ijk,ijk->j', windows, windows, dtype=np.float64)/(2*hop)
 
 
-def finalize(mixed, sr, density=0.):
-    """Fit the finished mix to the fixed loudness target, after optional density."""
+def finalize(mixed, sr, density=0., target_lufs=TARGET_LUFS, true_peak_ceiling=TRUE_PEAK_CEILING):
+    """Fit the finished mix to the target loudness and true-peak ceiling, after optional density."""
+    target_lufs = float(target_lufs)
+    true_peak_ceiling = float(true_peak_ceiling)
     if threading.current_thread() is not threading.main_thread():
-        return render_isolated('--master-worker', mixed, sr=sr, density=density)
+        return render_isolated('--master-worker', mixed, sr=sr, density=density,
+                               target_lufs=target_lufs, true_peak_ceiling=true_peak_ceiling)
     input_lufs = _loudness(mixed, sr)
-    stats = {'engine':'C+', 'target_lufs':TARGET_LUFS, 'true_peak_ceiling_dbtp':TRUE_PEAK_CEILING,
+    stats = {'engine':'C+', 'target_lufs':target_lufs, 'true_peak_ceiling_dbtp':true_peak_ceiling,
              'input_lufs':input_lufs if np.isfinite(input_lufs) else None, 'master_gain_db':0.,
              'density':{'amount':density,'applied':False}, 'iterations':0, 'stop_reason':'ungated'}
     if not np.isfinite(input_lufs):
@@ -109,13 +112,15 @@ def finalize(mixed, sr, density=0.):
     active = power > max(1e-12, power.max()*1e-4)
     window_weights = weights[hop//2:count*hop:hop][active]
     input_db = 10*np.log10(power[active])
-    drive = float(np.clip(TARGET_LUFS-initial+.75, -24., 24.))
+    drive = float(np.clip(target_lufs-initial+.75, -24., 24.))
     best, low, high = None, None, None
     constrained = False
     reason = 'iteration_limit'
     for attempt in range(1, 10):
         discount = min(2., .35 * max(drive, 0.))
-        candidate = _limit(mixed, sr, 10**((drive-discount*weights)/20.))
+        gain_curve = 10**((drive-discount*weights)/20.)
+        candidate = (_limit(mixed, sr, gain_curve) if true_peak_ceiling == TRUE_PEAK_CEILING
+                     else _limit(mixed, sr, gain_curve, ceiling=true_peak_ceiling))
         limited_power = _window_power(candidate, hop, count)[active]
         reduction = input_db + drive - discount*window_weights - 10*np.log10(np.maximum(limited_power, 1e-20))
         median_reduction = max(0., float(np.median(reduction))) if reduction.size else 0.
@@ -123,7 +128,7 @@ def finalize(mixed, sr, density=0.):
         actual = _loudness(candidate, sr)
         if not np.isfinite(actual):
             raise RuntimeError('ZL Limiter 返回的响度不可测量')
-        error = TARGET_LUFS-actual
+        error = target_lufs-actual
         excessive = median_reduction > MAX_MEDIAN_REDUCTION_DB
         if not excessive:
             if best is None or (abs(error), drive) < (best[0], best[2]):
@@ -168,20 +173,22 @@ def _written_peak(path):
     return float(levels[-1])
 
 
-def write_output(path, mixed, sr, stats):
+def write_output(path, mixed, sr, stats, true_peak_ceiling=None):
     from .mixing import measure_loudness
 
     path = Path(path)
+    ceiling = float(stats.get('true_peak_ceiling_dbtp', TRUE_PEAK_CEILING) if true_peak_ceiling is None else true_peak_ceiling)
+    target = float(stats.get('target_lufs', TARGET_LUFS))
     correction = 0.
     with tempfile.TemporaryDirectory(dir=path.parent, prefix='master-') as folder:
         pending = Path(folder)/'output.wav'
         audio.save(pending, mixed, sr)
         peak = _written_peak(pending)
-        if peak > TRUE_PEAK_CEILING:
-            correction = TRUE_PEAK_CEILING-.015-peak
+        if peak > ceiling:
+            correction = ceiling-.015-peak
             audio.save(pending, mixed * 10**(correction/20.), sr)
             peak = _written_peak(pending)
-        if peak > TRUE_PEAK_CEILING:
+        if peak > ceiling:
             raise RuntimeError('导出的母带超过真峰值上限')
         lufs, _ = measure_loudness(pending)
         pending.replace(path)
@@ -190,4 +197,4 @@ def write_output(path, mixed, sr, stats):
     stats.update(estimated_output_lufs=lufs if measurable else None,
                  measured_output_true_peak_dbtp=peak if np.isfinite(peak) else None,
                  true_peak_correction_db=correction, readback_verified=True,
-                 target_reached=bool(measurable and abs(lufs-TARGET_LUFS) <= .2))
+                 target_reached=bool(measurable and abs(lufs-target) <= .2))

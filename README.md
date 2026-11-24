@@ -51,6 +51,12 @@ Windows 10／11 x64 用户可从 [GitHub Release](https://github.com/AngleNaris/
 2. 选好输出目录，按需调整修正、美化、融合、比例和混音，点击 **VOX!**。
 3. 在播放器对比处理前和成品，在报告页查看变化。输出目录会保存 WAV 和离线报告。
 
+可在「原曲」旁选择或拖入同一版本的 `.lrc`。逐行歌词帮助定位原唱字句，软件仍根据音频确定字头。更换原曲会清除已选歌词。歌词无法读取或匹配证据不足时自动回退，报告会显示实际使用情况。
+
+「设置 → 保存选项」可为单曲和批量额外保存原唱人声、原曲伴奏，以及保留人声效果的处理后独立轨。额外音轨与成品使用同一版本号。处理后人声与成品对齐，包含混响和延时。全曲母带作用于成品。
+
+工作台的「曲风」菜单提供抒情流行、主流流行、民谣、摇滚、R&B、中国风、舞曲、说唱。应用后可用工作台控件调整，再从菜单选择「保存当前参数」或「恢复初始值」。
+
 ## 从源码运行
 
 准备 Windows x64、Python 3.13，以及带 C++ 桌面开发组件的 Visual Studio Build Tools。模型、FFmpeg、降噪组件和 ZL 插件需另行准备，来源和版本见[第三方组件说明](./THIRD_PARTY.txt)。
@@ -59,6 +65,21 @@ Windows 10／11 x64 用户可从 [GitHub Release](https://github.com/AngleNaris/
 python -m pip install -r requirements-desktop.txt
 python tools/build_signalsmith.py
 python desktop.py
+```
+
+### 命令行导入已有分轨
+
+```powershell
+python run.py desktop 干音.wav --reference-vocal 原唱人声.wav --instrumental 伴奏.wav -o out
+python run.py batch 干音1.wav 干音2.wav --reference-vocal 原唱人声.wav --instrumental 伴奏.wav -o out
+```
+
+原唱和伴奏应从同一时间点导出，保留各自的开头静音。传入两个分轨时省略原曲参数，程序将跳过原曲分离。`batch --manifest` 的每条记录可用 `reference_vocal` 和 `instrumental` 指定参考分轨，或用 `song` 指定原曲。基础入口 `python run.py 干音.wav` 也可以搭配这两个分轨参数。
+
+`desktop` 的原曲和分轨输入均可加 `--lyrics 原曲.lrc`。
+
+```powershell
+python run.py desktop 干音.wav 原曲.wav --lyrics 原曲.lrc -o out
 ```
 
 单曲和批量 CLI 使用与桌面版相同的参数映射，输出版本化 WAV 和报告。

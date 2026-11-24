@@ -58,11 +58,12 @@ class PreviewCache:
         if plan is None:
             hint = 0.
             if opts.alignment_backend == 'hubertfa_zh':
-                from .rhythm import onset_offset
-                hint = -onset_offset(self.data['input_f0'], self.data['ref_f0'])
+                from .rhythm import wide_onset_offset
+                hint = -wide_onset_offset(self.data['input_f0'], self.data['ref_f0'])
             align(source, self.data['reference_original'], C.VOC_SR, log=lambda _: None,
                   strength=0., capture=self.data, max_rate=opts.rhythm_max_rate,
-                  backend=opts.alignment_backend, offset_hint=hint)
+                  backend=opts.alignment_backend, offset_hint=hint, lyrics=self.data.get('lyrics', ()),
+                  dry_f0=self.data.get('input_f0'), ref_f0=self.data.get('ref_f0'))
             plan = self.data['rhythm_plan']
         if plan.get('backend') == 'hubertfa_zh':
             from .hubert_alignment import plan_segments as chinese_plan
@@ -104,19 +105,26 @@ class PreviewCache:
         pitch_reference = {}
         if mapping is not None:
             from .full_align import pitch_mapping
+            from .align import augment_pitch_correspondence
             times, valid = pitch_mapping(*mapping, len(dry_f0), C.F0_FRAME_RATE, start/C.VOC_SR)
-            pitch_reference = dict(reference_times=times-start/C.VOC_SR, reference_valid=valid)
+            rel_times, valid, _ = augment_pitch_correspondence(
+                dry_f0, ref_f0, times - start / C.VOC_SR, valid, fps=C.F0_FRAME_RATE)
+            pitch_reference = dict(reference_times=rel_times, reference_valid=valid)
             protected = []
         shift = estimate_shift(dry_f0, ref_f0, strength=opts.strength,
                                max_shift_cents=opts.max_shift_cents, offset_override=0., pitch_mode='register',
                                register_detail=opts.register_detail,
+                               large_note_limit_cents=opts.large_note_limit_cents,
                                **pitch_reference).shift_cents
         for lo, hi in protected:
             a = max(0, round((lo-start/C.VOC_SR) * C.F0_FRAME_RATE))
             b = max(0, round((hi-start/C.VOC_SR) * C.F0_FRAME_RATE))
             shift[a:b] = 0
+        if renderer == 'signalsmith':
+            from .signalsmith import smooth_render_shift
+            shift = smooth_render_shift(shift, f0=dry_f0)
         return render_waveform(vocal, C.VOC_SR, shift, renderer,
-                               f0=self.data.get('input_f0', dry_f0), checkpoint=checkpoint)
+                               f0=dry_f0, checkpoint=checkpoint)
 
     def render(self, opts, position, seconds=12, *, checkpoint=None):
         """返回窗口起点与立体声草稿，允许调用方在处理阶段之间取消。"""
@@ -135,8 +143,9 @@ class PreviewCache:
                          and opts.pitch_mode == 'register' and opts.strength)
         if chinese_pitch and not self.data.get('pitch_reference'):
             same_source = False
-        detail = (opts.register_detail, opts.max_shift_cents)
-        original_detail = (self.initial.get('register_detail',0.),self.initial.get('max_shift_cents',450.))
+        detail = (opts.register_detail, opts.max_shift_cents, opts.large_note_limit_cents)
+        original_detail = (self.initial.get('register_detail',0.),self.initial.get('max_shift_cents',450.),
+                           self.initial.get('large_note_limit_cents',None))
         renderer = 'psola' if opts.renderer == 'vocoder' else opts.renderer
         reused_vocal = (same_source and opts.strength == self.initial['strength'] and detail == original_detail
                         and opts.renderer == self.initial['renderer']
@@ -155,7 +164,8 @@ class PreviewCache:
                     pitch_reference = self.data.get('pitch_reference', {})
                     self.full_shift = estimate_shift(self.data['dry_f0'], self.data['ref_f0'],
                         strength=1., max_shift_cents=opts.max_shift_cents, offset_override=-self.data['move'],
-                        pitch_mode='register', register_detail=opts.register_detail, **pitch_reference).shift_cents
+                        pitch_mode='register', register_detail=opts.register_detail,
+                        large_note_limit_cents=opts.large_note_limit_cents, **pitch_reference).shift_cents
                     protected = [] if pitch_reference else self.report.get('rhythm', {}).get('protected_intervals_seconds', [])
                     for lo, hi in protected:
                         self.full_shift[round(lo*C.F0_FRAME_RATE):round(hi*C.F0_FRAME_RATE)] = 0
@@ -166,7 +176,14 @@ class PreviewCache:
             shift = np.interp(times * C.F0_FRAME_RATE, np.arange(len(self.full_shift)),
                               self.full_shift, left=0., right=0.) * opts.strength
             if opts.strength:
-                vocal = render_waveform(vocal, sr, shift, renderer, f0=self.data.get('input_f0'),
+                dry_f0_track = self.data.get('dry_f0')
+                local_f0 = (np.interp(times * C.F0_FRAME_RATE, np.arange(len(dry_f0_track)),
+                                      dry_f0_track, left=0., right=0.)
+                            if dry_f0_track is not None else self.data.get('input_f0'))
+                if renderer == 'signalsmith':
+                    from .signalsmith import smooth_render_shift
+                    shift = smooth_render_shift(shift, f0=local_f0)
+                vocal = render_waveform(vocal, sr, shift, renderer, f0=local_f0,
                                         checkpoint=checkpoint)
             vocal *= self.data['vocal_normalization'] * 10 ** (opts.vocal_gain_db / 20)
             accompaniment = self.data['inst'][:, start:end].copy()
@@ -235,7 +252,7 @@ class PreviewCache:
                 lowcut_hz=opts.mix_lowcut_hz, eq=opts.mix_eq, compression=opts.mix_compression,
                 deessing=opts.mix_deess, harmonics=opts.mix_harmonics, reverb=opts.mix_reverb, delay_amount=opts.mix_delay,
                 duck=opts.mix_duck, reference_vocal=reference,
-                vocal_gain_db=opts.vocal_gain_db, gain_db=gain_db)
+                vocal_gain_db=opts.vocal_gain_db, gain_db=gain_db, profile=opts.mix_profile)
             check()
             if opts.fixed_master:
                 if opts.master_density and baseline.get('input_lufs') is not None:
@@ -256,8 +273,10 @@ class PreviewCache:
         else:
             mixed = accompaniment + vocal[None, :]
         if opts.fixed_master:
-            # 草稿用整曲的母带增益近似，避免每次编辑重新迭代整曲响度。
-            mixed *= 10**((baseline.get('master_gain_db', 0.)+baseline.get('true_peak_correction_db', 0.))/20.)
+            # 草稿用整曲的母带增益并叠加目标响度差近似，避免每次编辑重新迭代整曲响度。
+            base_target = baseline.get('target_lufs', opts.target_lufs)
+            lufs_delta = (opts.target_lufs - base_target) if base_target is not None else 0.
+            mixed *= 10**((baseline.get('master_gain_db', 0.)+baseline.get('true_peak_correction_db', 0.)+lufs_delta)/20.)
         peak = audio.peak(mixed)
         ceiling = 10 ** (opts.true_peak_ceiling / 20)
         if peak > ceiling:

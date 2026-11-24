@@ -61,10 +61,14 @@ class Worker(QThread):
     succeeded = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, dry, song, output_dir, options, session, work=None):
+    def __init__(self, dry, song, output_dir, options, session, work=None, *, save_original_stems=False,
+                 save_processed_vocal=False, lyrics_path=None):
         super().__init__()
         self.dry, self.song, self.output_dir, self.options = dry, song, Path(output_dir), options
         self.session, self.work, self.error_detail = session, work, ''
+        self.save_original_stems = save_original_stems
+        self.save_processed_vocal = save_processed_vocal
+        self.lyrics_path = lyrics_path
 
     def run(self):
         try:
@@ -73,7 +77,9 @@ class Worker(QThread):
                     raise InterruptedError('已取消处理，可以调整设置后重试。')
                 self.message.emit(message)
             result = export_job(self.dry, self.song, self.output_dir, self.options, self.session,
-                                work=self.work, log=log, audition=True)
+                                work=self.work, log=log, audition=True,
+                                save_original_stems=self.save_original_stems,
+                                save_processed_vocal=self.save_processed_vocal, lyrics_path=self.lyrics_path)
             self.succeeded.emit(result)
         except InterruptedError as exc:
             self.failed.emit(str(exc))
@@ -161,7 +167,7 @@ class Bridge(QObject):
         super().__init__(parent)
         self.player = ComparisonPlayer(); self.player.volume = 1.
         self.session = tempfile.TemporaryDirectory(prefix='shadowvox-preview-')
-        self.inputs = {'song': '', 'dry': ''}
+        self.inputs = {'song': '', 'dry': '', 'lyrics': ''}
         self.worker = self.draft_worker = self.loader = self.plugin_process = None
         self.work_override = None; self.preview_cache = None; self.params = None
         self.live_preview = True
@@ -181,16 +187,31 @@ class Bridge(QObject):
 
     @Slot(str, result=str)
     def pickAudio(self, kind):
-        title = '选择原曲' if kind == 'song' else '选择演唱干音'
-        value, _ = QFileDialog.getOpenFileName(None, title, str(Path(self.inputs[kind]).parent) if self.inputs[kind] else '', AUDIO_FILTER)
+        if self.busy() or kind not in self.inputs:
+            return ''
+        title = {'song': '选择原曲', 'dry': '选择演唱干音', 'lyrics': '选择原唱 LRC 歌词'}[kind]
+        previous = self.inputs[kind] or (self.inputs['song'] if kind == 'lyrics' else '')
+        filters = 'LRC 歌词 (*.lrc)' if kind == 'lyrics' else AUDIO_FILTER
+        value, _ = QFileDialog.getOpenFileName(None, title, str(Path(previous).parent) if previous else '', filters)
         return self.setInput(kind, value) if value else ''
 
     @Slot(str, str, result=str)
     def setInput(self, kind, path):
-        if self.busy() or kind not in self.inputs or not Path(path).is_file():
+        if self.busy() or kind not in self.inputs:
             return ''
-        self.inputs[kind] = str(Path(path)); self.invalidate()
-        return json.dumps(dict(path=self.inputs[kind], name=Path(path).name), ensure_ascii=False)
+        file = Path(path) if path else None
+        if file is None and kind != 'lyrics':
+            return ''
+        if file is not None and (not file.is_file() or (kind == 'lyrics' and file.suffix.lower() != '.lrc')):
+            return ''
+        changed_song = kind == 'song' and bool(self.inputs['song']) and Path(self.inputs['song']) != file
+        cleared_lyrics = changed_song and bool(self.inputs['lyrics'])
+        if cleared_lyrics:
+            self.inputs['lyrics'] = ''
+        self.inputs[kind] = str(file) if file is not None else ''
+        self.invalidate()
+        return json.dumps(dict(path=self.inputs[kind], name=file.name if file is not None else '',
+                               cleared_lyrics=cleared_lyrics), ensure_ascii=False)
 
     @Slot(str, result=str)
     def pickBatchFiles(self, kind):
@@ -315,13 +336,16 @@ class Bridge(QObject):
     # ── 处理 ──
     @Slot('QVariantMap', result=bool)
     def process(self, params):
-        if self.busy() or not all(Path(p).is_file() for p in self.inputs.values()) or not params.get('output'):
+        if self.busy() or not all(Path(self.inputs[k]).is_file() for k in ('song', 'dry')) or not params.get('output'):
             return False
         self.draft_revision += 1; self.cancel_draft()
         self.draftState.emit('{"state":"empty"}')
         self.params = dict(params)
         self.worker = Worker(self.inputs['dry'], self.inputs['song'], params['output'],
-                             options_from(params), self.session.name, self.work_override)
+                             options_from(params), self.session.name, self.work_override,
+                             save_original_stems=bool(params.get('save_original_stems')),
+                             save_processed_vocal=bool(params.get('save_processed_vocal')),
+                             lyrics_path=self.inputs['lyrics'])
         self.worker.message.connect(self.on_message); self.worker.succeeded.connect(self.on_success)
         self.worker.failed.connect(self.on_failure)
         self.started = time.monotonic(); self.worker.start()
@@ -335,6 +359,9 @@ class Bridge(QObject):
     @Slot(str)
     def on_message(self, message):
         if self.worker and self.worker.isInterruptionRequested(): return
+        if message.startswith('[歌词]'):
+            self.stage.emit(2, -1., message.removeprefix('[歌词] '))
+            return
         if message.startswith('[合成]'):
             try: self.stage.emit(4, float(message.split()[-1].rstrip('%'))/100, '修正人声')
             except ValueError: pass
@@ -356,7 +383,7 @@ class Bridge(QObject):
         self.preview_cache = PreviewCache(result['capture'], result['report'])
         self.load_tracks(n, result['tracks'], result['sr'], result['preview']['gains_db'], select=2)
         rhythm = result['report'].get('rhythm', {})
-        payload = dict(report=self.versions[n]['report'],
+        payload = dict(report=self.versions[n]['report'], lyrics=result['report'].get('lyrics'),
                        versions=[dict(n=k, name=v['report']['name'], path=v['report']['path']) for k, v in sorted(self.versions.items())],
                        protected=rhythm.get('protected_seconds', 0) > .5)
         self.finished.emit(json.dumps(payload, ensure_ascii=False))

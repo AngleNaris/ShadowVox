@@ -156,7 +156,7 @@ class DesktopBridgeTests(unittest.TestCase):
         from shadowvox.gui_bridge import options_from
         o = options_from(self.DEFAULTS)
         self.assertEqual((o.strength, o.pitch_mode, o.renderer, o.rhythm_mode, o.max_shift_cents), (.75, 'register', 'signalsmith', 'full', 450))
-        self.assertEqual((o.mix_eq, o.mix_reverb, o.mix_lowcut_hz, o.target_lufs, o.true_peak_ceiling, o.vocal_gain_db), (1., 1., 75., -8., -.5, 0.))
+        self.assertEqual((o.mix_eq, o.mix_reverb, o.mix_lowcut_hz, o.target_lufs, o.true_peak_ceiling, o.vocal_gain_db), (1., 1., 75., -8., -1., 0.))
         self.assertTrue(o.mix_effects and o.rhythm and o.denoise and o.declip and o.comparison)
         o = options_from({**self.DEFAULTS, 'mix_eq': 150, 'vocal_gain_db': -2.5, 'denoise': False})
         self.assertEqual((o.mix_eq, o.vocal_gain_db, o.denoise), (1.5, -2.5, False))
@@ -164,7 +164,7 @@ class DesktopBridgeTests(unittest.TestCase):
             o = options_from(dict(correction=50, beauty=50, fusion=50, ratio=35, mixdown=mixdown,
                                   mix_effects=False, target_lufs=-24, true_peak_ceiling=-4))
             self.assertEqual((o.fixed_master, o.target_lufs, o.true_peak_ceiling, o.master_density),
-                             (True, -8., -.5, mixdown/100))
+                             (True, -8., -1., mixdown/100))
 
     def test_versions_never_overwrite(self):
         from shadowvox.jobs import next_version

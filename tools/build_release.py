@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import importlib.metadata as metadata
 import json
+import os
 import platform
 import runpy
 import shutil
@@ -10,6 +11,8 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from build_signalsmith import OUTPUT as SIGNALSMITH, build as build_signalsmith
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,8 +57,8 @@ def main():
                  ROOT/'plugins/ZL Limiter.vst3/Contents/x86_64-win/ZL Limiter.vst3',
                  ROOT/'plugins/ZL-AGPL-3.0.txt']
     external += sorted(p for p in (ROOT/'models/hubertfa').iterdir() if p.is_file())
-    subprocess.run([sys.executable, '-B', str(ROOT/'tools/build_signalsmith.py')], cwd=ROOT, check=True)
-    external.append(ROOT/'tools/vendor/signalsmith/shadowvox-signalsmith.exe')
+    signalsmith = build_signalsmith(folder/'helpers'/SIGNALSMITH.name)
+    external.append(signalsmith)
     ffmpeg = Path(shutil.which('ffmpeg'))
     external.append(ffmpeg)
     inputs = {p.relative_to(ROOT).as_posix() if p.is_relative_to(ROOT) else p.name: sha256(p)
@@ -63,8 +66,9 @@ def main():
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm']
     if args.clean:
         command.append('--clean')
+    build_env = {**os.environ, 'SHADOWVOX_BUILD_SIGNALSMITH': str(signalsmith)}
     subprocess.run(command+['--distpath', str(destination), '--workpath', str(folder/'pyinstaller'),
-                           str(ROOT/'ShadowVox.spec')], cwd=ROOT, check=True)
+                           str(ROOT/'ShadowVox.spec')], cwd=ROOT, env=build_env, check=True)
     if sources != source_hashes():
         raise SystemExit('构建期间源码发生变化，请重新构建。')
     digest = sha256(executable)
