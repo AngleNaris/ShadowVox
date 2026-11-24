@@ -1,6 +1,6 @@
 ShadowVox 桌面版依赖与模型说明（原名 Atune）
 
-本地运行，无需上传音频。项目源码、构建配置 ShadowVox.spec 和测试脚本在本项目目录。
+本地运行，无需上传音频。ShadowVox 本项目源码采用 GNU Affero General Public License v3.0 (AGPL-3.0) 许可（见根目录 LICENSE）；项目源码、构建配置 ShadowVox.spec 和测试脚本在本项目目录。以下第三方组件与预训练模型权重各自适用其原始许可：
 
 模型与代码许可分别适用：
 - DeepFilterNet3 降噪模型：使用 deepfilternet-rs 0.1.1 所附 ONNX 权重及其 Rust 推理运行时。

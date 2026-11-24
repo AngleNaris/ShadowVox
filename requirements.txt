@@ -1,9 +1,13 @@
+# 核心音频与推理依赖（推荐 Python 3.13，Windows x64）
+# 提示：Whisper 依赖 PyTorch；为避免安装 2GB+ 的 CUDA 版导致打包膨胀，建议先安装 CPU 版 PyTorch：
+#   python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu torch
 numpy
 scipy
 soundfile
 librosa
 tqdm
 onnxruntime-directml
+# 仅在命令行 --sep-model 指定非默认分离模型时使用；默认 Kim_Vocal_2 走内置 ONNX 推理（PyInstaller 不打包此项）
 audio-separator
 audioread
 openai-whisper==20250625

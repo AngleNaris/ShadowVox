@@ -1,3 +1,6 @@
+# 桌面端运行与单文件打包完整依赖（推荐 Python 3.13，Windows x64）
+# 推荐安装方式（确保使用 CPU 版 PyTorch）：
+#   python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-desktop.txt
 -r requirements.txt
 PySide6-Essentials==6.12.0
 PySide6-Addons==6.12.0

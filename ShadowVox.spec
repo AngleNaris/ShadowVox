@@ -12,7 +12,17 @@ root=Path(SPECPATH)
 zl_bundles=[root/f'plugins/ZL {name}.vst3' for name in ('Compressor','Limiter')]
 zl_license=root/'plugins/ZL-AGPL-3.0.txt'
 if any(not (bundle/'Contents/x86_64-win'/bundle.name).is_file() for bundle in zl_bundles) or not zl_license.is_file():
-    raise SystemExit('请先运行 python tools/fetch_zl.py')
+    raise SystemExit('请先运行 python tools/fetch_zl.py（或 python tools/setup_env.py --install）')
+required_models=[root/'models/fcpe.onnx', root/'models/Kim_Vocal_2.onnx', root/'models/whisper-base.pt',
+                 root/'models/hubertfa/model.onnx',
+                 root/'models/hifigan_pkg/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx']
+missing_models=[p.relative_to(root).as_posix() for p in required_models if not p.is_file()]
+if missing_models:
+    raise SystemExit('缺少模型文件：' + ', '.join(missing_models) + '；请先运行 python tools/fetch_models.py')
+denoise_exe=root/'tools/vendor/deepfilternet/shadowvox-denoise.exe'
+denoise_licenses=root/'tools/vendor/deepfilternet/licenses'
+if not denoise_exe.is_file() or not denoise_licenses.is_dir():
+    raise SystemExit('缺少 DeepFilterNet3 降噪助手或许可目录，请先运行 python tools/build_denoise.py')
 app_info=runpy.run_path(str(root/'src/shadowvox/__init__.py'))
 version=app_info['__version__']
 filename=f'ShadowVox-{version}'
@@ -25,7 +35,7 @@ version_info=VSVersionInfo(
         StringStruct('FileVersion',version), StringStruct('ProductVersion',version),
         StringStruct('OriginalFilename',filename+'.exe')])]),
         VarFileInfo([VarStruct('Translation',[2052,1200])])])
-datas=[(str(root/'THIRD_PARTY.txt'),'licenses'),(str(root/'models/fcpe.onnx'),'models'),
+datas=[(str(root/'LICENSE'),'licenses'),(str(root/'THIRD_PARTY.txt'),'licenses'),(str(root/'models/fcpe.onnx'),'models'),
        (str(root/'models/Kim_Vocal_2.onnx'),'models'),
        (str(root/'models/whisper-base.pt'),'models'),
        (str(root/'models/hubertfa'),'models/hubertfa'),
@@ -57,8 +67,24 @@ for package in ('numpy','scipy','soundfile','sounddevice','onnxruntime-directml'
         if 'LICENSE' in str(relative).upper() or 'COPYING' in str(relative).upper():
             source=Path(dist.locate_file(relative))
             if source.is_file():datas.append((str(source),'licenses/'+package+'/'+str(relative.parent)))
-ffmpeg=Path(shutil.which('ffmpeg')).resolve()
-datas.append((str(ffmpeg.parent.parent/'LICENSE'),'licenses/ffmpeg'))
+ffmpeg_found=shutil.which('ffmpeg')
+if not ffmpeg_found:
+    for cand in (Path(r'C:\ffmpeg\bin\ffmpeg.exe'), Path(r'C:\Program Files\ffmpeg\bin\ffmpeg.exe')):
+        if cand.is_file():
+            ffmpeg_found=str(cand)
+            break
+if not ffmpeg_found:
+    raise SystemExit('未找到 ffmpeg.exe，请先安装 FFmpeg (推荐 winget install Gyan.FFmpeg) 并加入 PATH')
+ffmpeg=Path(ffmpeg_found).resolve()
+ffmpeg_license=next(
+    (base/name for base in (ffmpeg.parent.parent, ffmpeg.parent)
+     for name in ('LICENSE', 'LICENSE.txt', 'COPYING.GPLv3', 'COPYING.LGPLv3', 'COPYING')
+     if (base/name).is_file()),
+    None,
+)
+if ffmpeg_license is None:
+    raise SystemExit(f'未在 FFmpeg 目录找到 LICENSE 文件（{ffmpeg.parent.parent}），请安装附带许可文件的 Gyan FFmpeg full build')
+datas.append((str(ffmpeg_license),'licenses/ffmpeg'))
 python_license=Path(sys.base_prefix)/'LICENSE.txt'
 if python_license.exists():datas.append((str(python_license),'licenses/python'))
 binaries=[(str(ffmpeg),'bin'),(str(signalsmith),'bin'),
