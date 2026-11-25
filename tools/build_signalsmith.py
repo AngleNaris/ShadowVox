@@ -34,7 +34,7 @@ def build(output=OUTPUT):
                     f'/I"{SOURCE}/third_party/stretch" /I"{SOURCE}/third_party/linear/include" '
                     f'"{SOURCE}/stretch.cpp" /Fe:{output.name}')
         (folder/'build.cmd').write_text('@echo off\n'+setup+compiler+'\n', encoding='mbcs')
-        subprocess.run(['cmd.exe', '/d', '/c', 'build.cmd'], cwd=folder, check=True)
+        subprocess.run(['cmd.exe', '/d', '/c', str(folder/'build.cmd')], cwd=folder, check=True)
         (folder/output.name).replace(output)
     return output
 
