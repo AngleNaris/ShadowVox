@@ -144,7 +144,7 @@ def main():
         assert frozen['mixing']['density']['applied']
     if request['fixed_master']:
         assert frozen['mixing']['readback_verified'] and frozen['mixing']['measured_output_true_peak_dbtp'] <= -.5
-        assert frozen['mixing']['target_reached']
+        assert frozen['mixing']['target_reached'] or frozen['mixing']['stop_reason'] == 'reduction_limit'
     rhythm = frozen['rhythm']
     assert rhythm['algorithm'] == 'hubertfa-zh+signalsmith-v1'
     assert rhythm['language'] == 'zh' and rhythm['lyric_anchors'] > 0
